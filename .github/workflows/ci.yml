@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install black flake8 mypy
+        pip install -r requirements.txt
+
+    - name: Check formatting with black
+      run: black --check *.py
+
+    - name: Lint with flake8
+      run: |
+        # Stop on syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit with warning for other issues
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=100 --statistics
+
+    - name: Type check with mypy
+      run: mypy *.py --ignore-missing-imports
+      continue-on-error: true
+
+  security:
+    name: Security Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Check for exposed secrets
+      run: |
+        if grep -rE "AIzaSy[A-Za-z0-9_-]{33}" . --exclude-dir=.git; then
+          echo "Found exposed API key!"
+          exit 1
+        fi
+        echo "No exposed secrets found"
+
+  docs:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Check required files
+      run: |
+        test -f README.md || (echo "Missing README.md" && exit 1)
+        test -f LICENSE || (echo "Missing LICENSE" && exit 1)
+        test -f CONTRIBUTING.md || (echo "Missing CONTRIBUTING.md" && exit 1)
+        test -f CHANGELOG.md || (echo "Missing CHANGELOG.md" && exit 1)
+        test -f requirements.txt || (echo "Missing requirements.txt" && exit 1)
+        test -f .gitignore || (echo "Missing .gitignore" && exit 1)
+        echo "All required files present"
+
+    - name: Check .gitignore entries
+      run: |
+        grep -q "auth/" .gitignore || (echo ".gitignore missing auth/" && exit 1)
+        grep -q "cache/" .gitignore || (echo ".gitignore missing cache/" && exit 1)
+        grep -q "out/" .gitignore || (echo ".gitignore missing out/" && exit 1)
+        grep -q ".env" .gitignore || (echo ".gitignore missing .env" && exit 1)
+        echo ".gitignore looks good"
