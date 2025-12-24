@@ -26,7 +26,7 @@ if [ -f ".env" ]; then
 fi
 
 # Verify API keys are set
-if ! $PYTHON -c "import os; keys = os.environ.get('YOUTUBE_API_KEYS', ''); exit(0 if keys else 1)" 2>/dev/null; then
+if ! $PYTHON -c "import os; from dotenv import load_dotenv; load_dotenv(); exit(0 if os.environ.get('YOUTUBE_API_KEYS') else 1)" 2>/dev/null; then
     echo "[ERROR] YOUTUBE_API_KEYS not set!"
     echo ""
     echo "Please set environment variables:"

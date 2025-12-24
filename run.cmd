@@ -25,8 +25,8 @@ if exist ".env" (
     REM Note: dotenv will be loaded by Python scripts automatically
 )
 
-REM Verify API keys are set
-%PYTHON% -c "import os; keys = os.environ.get('YOUTUBE_API_KEYS', ''); exit(0 if keys else 1)" 2>nul
+REM Verify API keys are set (load .env if present)
+%PYTHON% -c "import os; from dotenv import load_dotenv; load_dotenv(); exit(0 if os.environ.get('YOUTUBE_API_KEYS') else 1)" 2>nul
 if errorlevel 1 (
     echo [ERROR] YOUTUBE_API_KEYS not set!
     echo.

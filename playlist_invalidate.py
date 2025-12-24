@@ -169,6 +169,7 @@ def load_playlist_cache(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 def build_invalidation_plan(
+    csv_stem: str,
     expected_videos: Dict[str, Dict[str, Any]],
     playlist_videos: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -185,6 +186,7 @@ def build_invalidation_plan(
             {
                 "action": "remove",
                 "video_id": video_id,
+                "list_stem": csv_stem,
                 "playlist_item_id": item.get("playlist_item_id"),
                 "title": item.get("title", "Unknown"),
                 "reason": "no_longer_valid",
@@ -242,7 +244,7 @@ def main() -> None:
         logger.info(f"[invalidate] Created empty plan at {plan_path}")
         return
 
-    plan = build_invalidation_plan(expected, playlist_videos)
+    plan = build_invalidation_plan(csv_stem, expected, playlist_videos)
     logger.info(f"[invalidate] Planned removals: {len(plan['actions'])}")
 
     plan_path = invalidation_plan_path(args.playlist_id)

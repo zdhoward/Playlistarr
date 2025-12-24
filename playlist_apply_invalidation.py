@@ -19,6 +19,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List
+import shutil
 
 from googleapiclient.errors import HttpError
 
@@ -184,6 +185,38 @@ def main() -> None:
         plan_path,
         cache_path,
     )
+
+    # ============================================================
+    # Retire artist discovery caches once fully removed
+    # ============================================================
+
+    actions = plan.get("actions", [])
+    if not actions:
+        return
+
+    csv_stem = actions[0].get("list_stem")
+    if not csv_stem:
+        logger.warning("[apply] No list_stem in actions — skipping artist retirement")
+        return
+
+    # Group actions by artist
+    by_artist = {}
+    for a in plan.get("actions", []):
+        artist = a.get("artist")
+        if not artist:
+            continue
+        by_artist.setdefault(artist, []).append(a)
+
+    for artist, actions in by_artist.items():
+        # Only delete artist cache if ALL actions are done
+        if not all(a.get("status") == "done" for a in actions):
+            continue
+
+        artist_dir = Path("out") / csv_stem / artist
+
+        if artist_dir.exists():
+            logger.info(f"[apply] Retiring artist cache: {artist}")
+            shutil.rmtree(artist_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
