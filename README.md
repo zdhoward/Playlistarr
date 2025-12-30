@@ -1,48 +1,71 @@
 # **Playlistarr**
 
-Playlistarr is a production-grade YouTube music-playlist automation engine.
+**Version:** 1.2
 
-It discovers official music videos for artists, applies filtering rules, and keeps YouTube playlists continuously in sync — while safely handling YouTube’s API quotas, OAuth limits, and partial-failure scenarios.
+Playlistarr is a **production-grade YouTube playlist automation engine** for homelabbers and self-hosters.
 
-This project is built for people who want **hands-off, self-healing, always-up-to-date music playlists** without relying on third-party services.
+It discovers official music videos for artists, applies deterministic filtering rules, and keeps YouTube playlists continuously in sync — **while being fully quota-aware, resumable, and log-driven**.
+
+This is not a “download everything” scraper.
+It is a **self-healing playlist maintenance system** designed to run safely over time with minimal supervision.
 
 ---
 
 ## **What Playlistarr Does**
 
-Playlistarr runs a multi-stage pipeline:
+Playlistarr runs a multi-stage pipeline every time you sync a playlist.
 
-1. **Discovery**
-   Finds official music videos for each artist using multiple heuristics:
+### 1. **Discovery**
 
-   * Official Artist Channels
-   * VEVO
-   * Title classification
-   * Channel trust rules
-   * Version / remix / cover filtering
+Discovers candidate music videos per artist using:
 
-2. **Planning**
-   Builds a deterministic invalidation plan that decides:
+* Official Artist Channels
+* VEVO channels
+* Channel trust heuristics
+* Title classification
+* Version / remix / live / cover exclusion rules
 
-   * What to remove
-   * What to keep
-   * What to add
+Discovery is read-only.
+No playlist mutation happens at this stage.
 
-3. **Safe Mutation**
-   Applies changes to your YouTube playlist using OAuth — but stops cleanly if quota is hit.
+---
 
-4. **Syncing**
-   Ensures the playlist matches the discovery results without duplicates or drift.
+### 2. **Planning**
 
-5. **Quota-Aware Execution**
-   Playlistarr automatically detects:
+Builds a deterministic invalidation plan:
 
-   * API key exhaustion
-   * OAuth quota exhaustion
-   * Invalid or expired OAuth tokens
-     and stops safely instead of corrupting your playlist.
+* What should be removed
+* What should be kept
+* What should be added
 
-Everything is logged with rich, colorized output and full debug traces.
+This stage is **pure analysis**.
+If a run stops here, nothing has changed.
+
+---
+
+### 3. **Safe Mutation**
+
+Applies playlist changes using OAuth:
+
+* Stops cleanly on quota exhaustion
+* Never leaves the playlist in a partial state
+* Applies changes incrementally and safely
+* Always records exactly what happened
+
+---
+
+### 4. **Quota-Aware Execution**
+
+Playlistarr automatically detects and categorizes:
+
+* API key quota exhaustion
+* OAuth quota exhaustion
+* Invalid or expired OAuth credentials
+* Clean success with no remaining work
+
+Every run exits in a **known, inspectable state**.
+
+Quota exhaustion is **expected behavior**, not failure.
 
 ---
 
@@ -50,13 +73,14 @@ Everything is logged with rich, colorized output and full debug traces.
 
 Playlistarr is for people who want:
 
-* Automatically maintained YouTube playlists
+* Hands-off YouTube music playlists
 * Canonical, official music videos only
 * Artist-based collections
-* Self-hosted, Docker-friendly tooling
-* Deterministic, resumable, quota-safe runs
+* Deterministic, resumable automation
+* Self-hosted, cron / systemd / Docker-friendly tooling
+* Full visibility via logs and CLI inspection
 
-If you’ve ever wanted something like “Spotify smart playlists, but for YouTube” — this is that.
+If you’ve ever wanted *Spotify-style smart playlists, but for YouTube* — this is that, without black boxes.
 
 ---
 
@@ -64,159 +88,216 @@ If you’ve ever wanted something like “Spotify smart playlists, but for YouTu
 
 ```
 Playlistarr/
-├── src/                    # All Python source code
-├── profiles/               # One folder per playlist profile
+├── src/
+│   ├── playlistarr.py        # CLI entrypoint
+│   ├── runner.py             # Pipeline orchestrator
+│   ├── logger/               # Structured logging subsystem
+│   ├── auth/                 # Provider-based OAuth system
+│   └── cli/
+│       ├── cli_sync.py
+│       ├── cli_auth.py
+│       ├── cli_profiles.py
+│       ├── cli_runs.py
+│       ├── cli_logs.py
+│       └── common.py
+├── profiles/                 # One profile = one playlist
 │   ├── muchloud.json
 │   └── muchloud.csv
-├── config/
-│   └── .env                # Secrets & tunables
-├── auth/                   # OAuth tokens (gitignored)
-├── logs/
+├── auth/                     # OAuth credentials (gitignored)
+├── logs/                     # Per-command, per-profile logs
 ├── cache/
 ├── out/
-├── playlistarr.py          # CLI entrypoint
-├── runner.py               # Pipeline orchestrator
-├── playlistarr.cmd         # Windows launcher
-└── playlistarr.sh          # Linux/macOS launcher
+├── playlistarr.cmd           # Windows launcher
+└── playlistarr.sh            # Linux / macOS launcher
 ```
 
-Each **profile** represents one playlist and lives entirely in `/profiles`.
+Each **profile** represents exactly one playlist and is fully self-contained.
 
 ---
 
 ## **Profiles**
 
-A profile is defined by:
+A profile consists of **two files**:
 
 ```
-profiles/muchloud.json
-profiles/muchloud.csv
+profiles/<name>.json
+profiles/<name>.csv
 ```
 
-The JSON stores playlist ID and rules.
-The CSV stores the artist list.
-
-You run Playlistarr against a profile by name:
-
-```bash
-playlistarr sync muchloud
-```
-
-This loads:
-
-```
-profiles/muchloud.json
-profiles/muchloud.csv
-```
-
-and runs the full pipeline for that playlist.
-
----
-
-## **Getting Started**
-
-### 1. Clone the repo
-
-```bash
-git clone https://github.com/yourname/playlistarr
-cd playlistarr
-```
-
-### 2. Create your `.env`
-
-Copy the template into `config/.env` and fill it in:
-
-```bash
-YOUTUBE_API_KEYS=key1,key2,key3
-LOG_LEVEL=DEBUG
-YT_SLEEP_SEC=0.2
-CACHE_TTL_SECONDS=21600
-```
-
-### 3. Set up OAuth
-
-Create a Google Cloud OAuth Desktop app and download:
-
-```
-auth/client_secrets.json
-```
-
-On first run you will be prompted to log in.
-
----
-
-### 4. Create a profile
-
-Example:
-
-**profiles/muchloud.json**
+### JSON — metadata and rules
 
 ```json
 {
   "label": "MuchLoud",
-  "playlist_id": "PLa73YkAc2TvLqEb9gqMHnmjoN30qpnPe3"
+  "playlist_id": "PLa73YkAc2TvLqEb9gqMHnmjoN30qpnPe3",
+  "rules": {
+    "min_duration_sec": 90,
+    "max_duration_sec": 600
+  }
 }
 ```
 
-**profiles/muchloud.csv**
+### CSV — artist list
+
+Single-column, header optional:
 
 ```csv
-Artist
 Linkin Park
 Deftones
 Korn
 Nine Inch Nails
 ```
 
+The CSV is treated as **authoritative input**.
+
 ---
 
-### 5. Run
+## **Getting Started**
+
+### 1. Clone
+
+```bash
+git clone https://github.com/zdhoward/playlistarr
+cd playlistarr
+```
+
+---
+
+### 2. Environment
+
+Create a `.env` file (location depends on your setup):
+
+```bash
+YOUTUBE_API_KEYS=key1,key2,key3
+LOG_LEVEL=INFO
+YT_SLEEP_SEC=0.2
+CACHE_TTL_SECONDS=21600
+```
+
+Environment variables are loaded silently and **never override existing shell values**.
+
+---
+
+### 3. OAuth Setup
+
+Create a Google Cloud **Desktop OAuth application** and place:
+
+```
+auth/client_secrets.json
+```
+
+On first run, Playlistarr will prompt for authentication and cache credentials locally.
+
+OAuth logic is fully provider-isolated.
+
+---
+
+### 4. Create a Profile
+
+```bash
+playlistarr profiles add muchloud --playlist PLa73YkAc2TvLqEb9gqMHnmjoN30qpnPe3
+```
+
+Edit the CSV to add artists.
+
+---
+
+## **Running Playlistarr**
+
+### Sync a profile
 
 ```bash
 playlistarr sync muchloud
 ```
 
-You’ll get:
+### Explicit run (no saved profile)
 
-* Rich colored console output
-* Full logs in `/logs`
-* Safe stopping when quota is hit
-* Resume-safe operation
+```bash
+playlistarr run --csv artists.csv --playlist PLAYLIST_ID
+```
 
 ---
 
-## **Quota-Safe by Design**
+## **Inspecting Runs & Logs**
 
-Playlistarr uses:
+Playlistarr is **log-driven**.
+Every run produces a timestamped log file.
 
-* **Multiple API keys** for discovery
-* **OAuth** for playlist mutation
-* Automatic quota detection
-* Automatic safe-stop when limits are hit
+### List runs
 
-It will never:
+```bash
+playlistarr runs list --profile muchloud
+```
 
-* Partially delete playlists
-* Leave you in an inconsistent state
-* Hammer the API
+Shows:
 
-You can run it daily, hourly, or from cron/Docker safely.
+* Run ID
+* Outcome (`ok`, `api_quota`, `oauth_quota`, etc.)
+* Timestamp
+* Log size
+
+---
+
+### Inspect a run
+
+```bash
+playlistarr runs show 2025-12-29_23-56-24 --profile muchloud
+```
+
+### View logs directly
+
+```bash
+playlistarr logs list --profile muchloud
+playlistarr logs show 2025-12-29_23-56-24 --profile muchloud --tail 50
+```
+
+Logs are the **source of truth**.
+
+---
+
+## **Run States**
+
+Every run ends in exactly one state:
+
+| State          | Meaning                          |
+| -------------- | -------------------------------- |
+| `ok`           | Fully synced, up to date         |
+| `api_quota`    | API keys exhausted safely        |
+| `oauth_quota`  | OAuth quota exhausted            |
+| `auth_invalid` | OAuth requires re-authentication |
+| `failed`       | Unexpected failure               |
+
+Quota exhaustion is a **controlled stop**, not an error.
+
+---
+
+## **Design Principles**
+
+* Deterministic planning
+* Zero partial mutation
+* Quota safety first
+* Provider-isolated auth
+* Log-driven introspection
+* CLI-first ergonomics
+* No silent behavior
+
+If something happens, it is logged.
 
 ---
 
 ## **Contributing**
 
-This is a single-developer project designed for clarity, not chaos.
+This is a single-developer project optimized for correctness and long-term operation.
 
-If you want to contribute:
+If you contribute:
 
-1. Fork the repo
-2. Keep changes scoped to one concern
-3. Preserve quota-safety and deterministic behavior
-4. Don’t add side effects to config files
-5. Prefer pure functions in `filters.py`
+1. Keep changes tightly scoped
+2. Do not weaken quota handling
+3. Preserve deterministic behavior
+4. Avoid hidden side effects
+5. Prefer explicit logging over magic
 
-PRs that break quota handling or deterministic planning will not be accepted.
+PRs that reduce safety guarantees will be rejected.
 
 ---
 

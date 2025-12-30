@@ -5,6 +5,115 @@ All notable changes to Playlistarr will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] – 2025-12-30
+
+### 🔧 Architecture & CLI Maturity Release
+
+This release finalizes Playlistarr’s transition from a script-based pipeline into a **modular, log-driven automation system** suitable for unattended homelab operation.
+
+### ✨ Highlights
+
+#### CLI & UX
+
+* Unified **modular CLI** with subcommands:
+
+  * `sync`, `run`, `profiles`, `runs`, `logs`, `auth`
+* Explicit `--verbose` and `--quiet` handling across commands
+* Linux-style, colorized console logging with consistent formatting
+* Deterministic exit states for automation and cron usage
+
+#### Logging System
+
+* Fully re-architected logging subsystem:
+
+  * Per-command and per-profile log directories
+  * Run-scoped log files with timestamped IDs
+  * Retention enforced **per module**
+* Log-driven inspection via CLI:
+
+  * List runs
+  * Inspect run state
+  * Tail logs without opening files manually
+* Safe log handler repointing between bootstrap and command execution
+
+#### OAuth & Auth Providers
+
+* OAuth logic fully isolated into **provider modules**
+* No direct OAuth usage outside providers
+* Source-agnostic auth architecture (YouTube is now just one provider)
+* Health checks for OAuth validity and quota exhaustion
+
+#### Project Structure
+
+* Centralized path resolution
+* Explicit run context (command, profile, run ID)
+* Reduced global state leakage
+* Clear separation between CLI, orchestration, providers, and utilities
+
+#### Testing & CI
+
+* Added **initial pytest suite** covering:
+
+  * Logger behavior
+  * Path resolution
+  * Auth provider health
+  * CLI smoke tests
+* CI-ready test baseline for future development
+* Dependency management consolidated into `pyproject.toml`
+
+### 🧠 Design Notes
+
+* Quota exhaustion is treated as a **first-class, non-error state**
+* Logging is the source of truth — not side effects
+* Deterministic planning before mutation is enforced throughout
+
+---
+
+## [1.1.0] – 2024-12-29
+
+### 🚧 Internal Refactor & Stability Release
+
+This release focused on **stabilizing the core pipeline** and preparing the codebase for long-term maintenance and automation.
+
+### ✨ Changes
+
+#### Pipeline Improvements
+
+* Clear separation between:
+
+  * Discovery
+  * Planning
+  * Mutation
+* Improved invalidation planning logic
+* Safer mutation execution with better early exits
+
+#### Configuration & Environment
+
+* Hardened environment variable handling
+* Improved `.env` loading behavior
+* Reduced implicit defaults and magic values
+
+#### Logging & Observability
+
+* Expanded structured logging coverage
+* Improved error classification
+* Clearer distinction between expected stops and failures
+
+#### Code Quality
+
+* Reduced monolithic scripts
+* Improved naming consistency
+* Removed unused legacy helpers
+* Better internal documentation via log messages
+
+### 🐛 Fixes
+
+* Fixed OAuth refresh edge cases
+* Corrected playlist mutation ordering issues
+* Improved handling of empty or no-op runs
+
+---
+
 ## [1.0.0] - 2024-12-22
 
 ### 🎉 Initial Production Release

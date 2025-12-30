@@ -36,6 +36,7 @@ import filters
 from api_manager import APIKeyManager, QuotaExhaustedError, http_get_json
 from utils import discovery_output_path, read_json_safe, write_json
 from logger import init_logging, get_logger
+from ui_events import emit_ui_event
 
 # ----------------------------
 # Logging
@@ -729,6 +730,7 @@ def discover_artist(
 
     # Resolve channel
     logger.debug(f"Resolving channel for {artist}...")
+    emit_ui_event("task", task="Finding channel")
     channel_info, matched_via = resolve_artist_channel(api, artist)
 
     if not channel_info:
@@ -755,6 +757,8 @@ def discover_artist(
     logger.debug(f"Found channel: {channel_info.channel_title} ({matched_via})")
     stats.channel = channel_info
     stats.matched_via = matched_via
+
+    emit_ui_event("task", task="Fetching uploads")
 
     # Get uploads
     uploads = api.list_uploads(channel_info.channel_id)
@@ -783,6 +787,8 @@ def discover_artist(
     # Get video details
     video_ids = [v["video_id"] for v in uploads]
     details_map = api.get_video_details(video_ids)
+
+    emit_ui_event("task", task="Filtering videos")
 
     # Process videos
     accepted = []
@@ -900,19 +906,51 @@ def main() -> int:
     csv_stem = csv_path.stem
 
     try:
-        for artist in artists:
+        emit_ui_event(
+            "stage_start",
+            stage="Discovery",
+            index=0,
+            total=len(artists),
+            task="Starting",
+        )
+        for idx, artist in enumerate(artists, start=1):
             logger.debug(f"Processing: {artist}")
+
+            emit_ui_event(
+                "artist_start",
+                stage="Discovery",
+                index=idx,
+                total=len(artists),
+                artist=artist,
+                task="Finding channel",
+                old=0,
+                new=0,
+                api_key_index=api_key_manager.current_index + 1,
+                api_key_total=len(api_key_manager.keys),
+            )
 
             output_dir = discovery_output_path(csv_stem, artist)
 
             try:
-                discover_artist(api, artist, output_dir, force_update)
+                stats = discover_artist(api, artist, output_dir, force_update)
+
+                emit_ui_event(
+                    "artist_done",
+                    stage="Discovery",
+                    index=idx,
+                    total=len(artists),
+                    artist=artist,
+                    old=stats.review,
+                    new=stats.accepted,
+                )
             except QuotaExhaustedError:
                 logger.warning("YouTube API quota exhausted — stopping discovery")
+                emit_ui_event("detail", line="YouTube API quota exhausted — stopping discovery", style="yellow")
                 return 2
 
             except Exception as e:
                 logger.exception(f"Error processing {artist}")
+                emit_ui_event("detail", line=f"Error processing {artist}", style="red")
                 continue
 
         logger.debug("Discovery complete!")

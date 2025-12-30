@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import sys
 from typing import Optional
 
 
@@ -111,6 +112,10 @@ class Environment:
 
         self.verbose = os.environ.get("PLAYLISTARR_VERBOSE", "0") == "1"
         self.quiet = os.environ.get("PLAYLISTARR_QUIET", "0") == "1"
+
+        # Interactive console UI ("normal" mode). Runner-only.
+        self.no_ui = os.environ.get("PLAYLISTARR_NO_UI", "0") == "1"
+        self.interactive = (not self.verbose) and (not self.quiet) and (not self.no_ui) and sys.stdout.isatty()
 
 
 # ============================================================

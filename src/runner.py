@@ -6,25 +6,30 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from email.header import make_header
 from enum import Enum
 from pathlib import Path
 from typing import Optional
-from branding import PLAYLISTARR_BANNER, PLAYLISTARR_DIVIDER, PLAYLISTARR_HEADER, PLAYLISTARR_SECTION_END
 
-
+from branding import PLAYLISTARR_BANNER
+from env import get_env
 from logger import get_logger
-
+from ui import InteractiveUI
+from ui_events import try_parse_ui_event
 
 logger = get_logger("runner")
 
 
+# ============================================================================
+# Models
+# ============================================================================
+
+
 class RunResult(Enum):
-    OK = "ok"
-    API_QUOTA = "api_quota"
-    OAUTH_QUOTA = "oauth_quota"
-    AUTH_INVALID = "auth_invalid"
-    FAILED = "failed"
+    OK = "completed"          # ran fully, up-to-date
+    API_QUOTA = "api_quota"   # controlled stop (discovery quota)
+    OAUTH_QUOTA = "oauth_quota"  # controlled stop (oauth quota)
+    AUTH_INVALID = "auth_invalid"  # action required
+    FAILED = "failed"         # unexpected failure
 
 
 @dataclass
@@ -42,12 +47,44 @@ class RunSummary:
     steps: list[StepResult]
 
 
+# ============================================================================
+# Helpers
+# ============================================================================
+
+
 def _project_root() -> Path:
     return Path(__file__).resolve().parent
 
 
 def _py() -> str:
     return sys.executable
+
+
+def _stage_status(stage_name: str, exit_code: int) -> str:
+    """
+    UI-only stage status mapping.
+
+    Important nuance:
+      - oauth_health_check.py uses exit_code 2 => AUTH INVALID
+      - mutation stages (apply/sync) use exit_code 2 => OAUTH QUOTA
+      - exit_code 1 => quota exhausted (API keys) in your pipeline
+    """
+    if exit_code == 0:
+        return "completed"
+    if exit_code == 1:
+        return "quota_exhausted"
+
+    if exit_code == 2:
+        if stage_name.lower().startswith("oauth health"):
+            return "auth_invalid"
+        return "quota_exhausted"
+
+    return "failed"
+
+
+# ============================================================================
+# Script runners
+# ============================================================================
 
 
 def _run_script(
@@ -58,21 +95,14 @@ def _run_script(
     stop_on_codes: set[int] | None = None,
     allow_fail: bool = False,
 ) -> StepResult:
-    """
-    Run a single python script in a subprocess.
-    Returns exit code + duration.
-
-    stop_on_codes:
-      if the script returns one of these exit codes, we mark stopped_pipeline=True.
-    """
     if args is None:
         args = []
     if stop_on_codes is None:
         stop_on_codes = set()
 
     cmd = [_py(), str(_project_root() / script), *args]
-
     start = time.time()
+
     try:
         proc = subprocess.run(
             cmd,
@@ -81,210 +111,252 @@ def _run_script(
             text=True,
         )
         code = int(proc.returncode)
-    except FileNotFoundError:
-        return StepResult(name=name, exit_code=127, seconds=time.time() - start, stopped_pipeline=True, note=f"Missing script: {script}")
     except Exception as e:
-        return StepResult(name=name, exit_code=1, seconds=time.time() - start, stopped_pipeline=True, note=f"Runner exception: {e}")
+        # This is a runner failure (not a stage exit code)
+        return StepResult(name, 99, time.time() - start, True, str(e))
 
     dur = time.time() - start
-
     stopped = code in stop_on_codes
-    note = ""
 
-    if stopped:
-        note = "Stop condition triggered"
-    elif (code != 0) and allow_fail:
-        note = "Non-zero exit (allowed)"
-    elif code != 0:
-        note = "Non-zero exit"
-
-    return StepResult(name=name, exit_code=code, seconds=dur, stopped_pipeline=stopped, note=note)
+    return StepResult(name, code, dur, stopped)
 
 
-def _log_step_banner(title: str) -> None:
-    logger.info("")
-    logger.info("=" * 44)
-    logger.info(title)
-    logger.info("=" * 44)
+def _run_script_interactive(
+    script: str,
+    *,
+    name: str,
+    ui: InteractiveUI,
+    args: list[str] | None = None,
+    stop_on_codes: set[int] | None = None,
+    allow_fail: bool = False,
+) -> StepResult:
+    if args is None:
+        args = []
+    if stop_on_codes is None:
+        stop_on_codes = set()
+
+    # Force UI mode for subprocesses
+    env = os.environ.copy()
+    env["PLAYLISTARR_UI"] = "1"
+    env["PLAYLISTARR_QUIET"] = "1"
+    env["PLAYLISTARR_VERBOSE"] = "0"
+
+    cmd = [_py(), str(_project_root() / script), *args]
+    start = time.time()
+    last_line: Optional[str] = None
+
+    proc = subprocess.Popen(
+        cmd,
+        cwd=str(_project_root()),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    assert proc.stdout is not None
+
+    try:
+        for raw in proc.stdout:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+
+            evt = try_parse_ui_event(line)
+            if evt:
+                _apply_ui_event(ui, evt)
+                ui.render()
+                continue
+
+            last_line = line
+            logger.debug(f"[{name}] {line}")
+    except Exception as e:
+        # If we blow up reading stdout, try to stop the child and return a runner failure code.
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        dur = time.time() - start
+        return StepResult(name, 99, dur, True, f"interactive read failed: {e}")
+
+    code = int(proc.wait())
+    dur = time.time() - start
+    stopped = code in stop_on_codes
+    note = last_line or ""
+
+    return StepResult(name, code, dur, stopped, note)
 
 
-def _log_step_summary(step: StepResult) -> None:
-    msg = f"{step.name}: exit={step.exit_code} ({step.seconds:.1f}s)"
+def _apply_ui_event(ui: InteractiveUI, evt: dict) -> None:
+    event = evt.get("event")
 
-    if step.exit_code == 0:
-        logger.info(msg)
+    if event == "stage_start":
+        ui.set_stage(evt.get("stage", ""), index=evt.get("index", 0), total=evt.get("total", 0))
+        ui.set_task(evt.get("task", ""))
         return
 
-    if step.note:
-        msg = f"{msg} — {step.note}"
+    if event == "artist_start":
+        ui.set_artist(evt.get("artist", ""))
+        ui.set_task(evt.get("task", ""))
+        ui.set_counts(old=evt.get("old"), new=evt.get("new"))
+        ui.set_api_key(index=evt.get("api_key_index"), total=evt.get("api_key_total"))
+        return
 
-    # Clean quota exits should be warnings, not errors
-    if (
-        step.exit_code in (2, 10, 11, 12)
-        or (step.name in ("invalidate_apply", "sync") and step.exit_code == 1)
-        or (step.name == "discover" and step.exit_code == 1)
-    ):
-        logger.warning(msg)
-    else:
-        logger.error(msg)
+    if event == "artist_done":
+        ui.push_history(evt.get("artist", ""))
+        ui.set_progress(completed=evt.get("index"))
+        return
+
+    if event == "detail":
+        ui.push_detail(evt.get("line", ""), style=evt.get("style", "dim"))
+
+
+# ============================================================================
+# Orchestrator
+# ============================================================================
 
 
 def run_once() -> RunSummary:
-    """
-    Orchestrate a single pipeline run.
-    Expects PLAYLISTARR_* env vars already set (by playlistarr.py).
-    """
+    env = get_env()
+    interactive = env.interactive
+
+    ui: Optional[InteractiveUI] = None
     steps: list[StepResult] = []
 
-    artists_csv = os.environ.get("PLAYLISTARR_ARTISTS_CSV", "")
-    playlist_id = os.environ.get("PLAYLISTARR_PLAYLIST_ID", "")
+    # The single source of truth for final outcome.
+    # Must be set before every return path; also finalized in `finally`.
+    final_result: RunResult = RunResult.FAILED
 
-    if not artists_csv or not playlist_id:
-        logger.error("Missing required env vars: PLAYLISTARR_ARTISTS_CSV / PLAYLISTARR_PLAYLIST_ID")
-        return RunSummary(overall=RunResult.FAILED, steps=[])
+    def run_stage(**kw) -> StepResult:
+        nonlocal ui
+        if interactive:
+            assert ui is not None
+            return _run_script_interactive(ui=ui, **kw)
+        return _run_script(**kw)
 
-    # ------------------------------------------------------------
-    # 0) OAuth Health Check
-    # ------------------------------------------------------------
-    logger.info(PLAYLISTARR_HEADER("OAuth Health Check"))
-    oauth = _run_script(
-        "oauth_health_check.py",
-        name="oauth_health_check",
-        # Treat "reauth required" as a hard stop if your script uses exit=2 for that
-        stop_on_codes={2},
-        allow_fail=False,
-    )
-    steps.append(oauth)
-    _log_step_summary(oauth)
+    try:
+        if interactive:
+            ui = InteractiveUI()
+            ui.start()
+            ui.push_detail(PLAYLISTARR_BANNER.strip(), style="bold")
+            ui.render(force=True)
 
-    if oauth.exit_code == 2:
-        # OAuth invalid/expired and reauth didn't succeed
-        return RunSummary(overall=RunResult.AUTH_INVALID, steps=steps)
+        # ------------------------------------------------------------
+        # OAuth Health
+        # ------------------------------------------------------------
+        oauth = run_stage(script="oauth_health_check.py", name="OAuth Health Check", stop_on_codes={2})
+        steps.append(oauth)
+        if ui:
+            ui.mark_stage("OAuth Health Check", _stage_status("OAuth Health Check", oauth.exit_code))
 
-    # Note: if oauth_health_check returns "quota exhausted but oauth valid" as 0, continue.
+        if oauth.exit_code == 2:
+            final_result = RunResult.AUTH_INVALID
+            return RunSummary(final_result, steps)
 
-    # ------------------------------------------------------------
-    # 1) Discovery
-    # ------------------------------------------------------------
-    logger.info(PLAYLISTARR_HEADER("Discovery"))
-    discovery = _run_script(
-        "discover_music_videos.py",
-        name="discover",
-        # If discovery returns 2 for API key quota exhaustion, we stop discovery but keep going.
-        stop_on_codes=set(),
-        allow_fail=True,
-    )
-    steps.append(discovery)
-    _log_step_summary(discovery)
+        if oauth.exit_code != 0:
+            final_result = RunResult.FAILED
+            return RunSummary(final_result, steps)
 
-    # ------------------------------------------------------------
-    # 2) Invalidation Plan
-    # ------------------------------------------------------------
-    logger.info(PLAYLISTARR_HEADER("Invalidation (plan)"))
-    inv_plan = _run_script(
-        "playlist_invalidate.py",
-        name="invalidate_plan",
-        allow_fail=False,
-    )
-    steps.append(inv_plan)
-    _log_step_summary(inv_plan)
+        # ------------------------------------------------------------
+        # Discovery (API keys)
+        # ------------------------------------------------------------
+        disc = run_stage(script="discover_music_videos.py", name="Discovery", allow_fail=True)
+        steps.append(disc)
+        if ui:
+            ui.mark_stage("Discovery", _stage_status("Discovery", disc.exit_code))
 
-    if inv_plan.exit_code != 0:
-        return RunSummary(overall=RunResult.FAILED, steps=steps)
+        # If discovery returns quota exhausted (1), that's a controlled stop.
+        # We still might have already produced partial outputs for later stages;
+        # but your pipeline has always allowed discovery to stop safely.
+        if disc.exit_code == 1:
+            final_result = RunResult.API_QUOTA
+            return RunSummary(final_result, steps)
 
-    # ------------------------------------------------------------
-    # 3) Invalidation Apply (OAuth mutations)
-    # ------------------------------------------------------------
-    logger.info(PLAYLISTARR_HEADER("Invalidation (apply)"))
-    inv_apply = _run_script(
-        "playlist_apply_invalidation.py",
-        name="invalidate_apply",
-        # If apply hits OAuth quota, it should exit with 2 (or your chosen code).
-        stop_on_codes={2},
-        allow_fail=True,
-    )
-    steps.append(inv_apply)
-    _log_step_summary(inv_apply)
+        if disc.exit_code != 0:
+            final_result = RunResult.FAILED
+            return RunSummary(final_result, steps)
 
-    if inv_apply.exit_code == 2:
-        return RunSummary(overall=RunResult.OAUTH_QUOTA, steps=steps)
+        # ------------------------------------------------------------
+        # Invalidate Plan
+        # ------------------------------------------------------------
+        invp = run_stage(script="playlist_invalidate.py", name="Invalidation Plan")
+        steps.append(invp)
+        if ui:
+            ui.mark_stage("Invalidation Plan", _stage_status("Invalidation Plan", invp.exit_code))
 
-    if inv_apply.exit_code not in (0, 2):
-        # non-zero, non-quota
-        return RunSummary(overall=RunResult.FAILED, steps=steps)
+        if invp.exit_code != 0:
+            final_result = RunResult.FAILED
+            return RunSummary(final_result, steps)
 
-    # ------------------------------------------------------------
-    # 4) Cleanup (should never kill the pipeline)
-    #    Your cleanup currently still requires args, so we pass them.
-    # ------------------------------------------------------------
-    logger.info(PLAYLISTARR_HEADER("Cleanup"))
-    cleanup_args = [artists_csv, playlist_id]
-    # Preserve previous default: apply deletions only if not dry-run
-    if os.environ.get("PLAYLISTARR_DRY_RUN", "0") != "1":
-        cleanup_args.append("--apply")
+        # ------------------------------------------------------------
+        # Invalidate Apply (OAuth mutation)
+        # ------------------------------------------------------------
+        inva = run_stage(
+            script="playlist_apply_invalidation.py",
+            name="Invalidation Apply",
+            stop_on_codes={2},
+            allow_fail=True,
+        )
+        steps.append(inva)
+        if ui:
+            ui.mark_stage("Invalidation Apply", _stage_status("Invalidation Apply", inva.exit_code))
 
-    cleanup = _run_script(
-        "cleanup.py",
-        args=cleanup_args,
-        name="cleanup",
-        allow_fail=True,
-    )
-    steps.append(cleanup)
-    _log_step_summary(cleanup)
+        # In your current pipeline, apply uses exit_code 2 for OAuth quota exhaustion
+        if inva.exit_code == 2:
+            final_result = RunResult.OAUTH_QUOTA
+            return RunSummary(final_result, steps)
 
-    # ------------------------------------------------------------
-    # 5) Playlist Sync (OAuth mutations)
-    # ------------------------------------------------------------
-    logger.info(PLAYLISTARR_HEADER("Playlist Sync"))
-    sync = _run_script(
-        "youtube_playlist_sync.py",
-        name="sync",
-        stop_on_codes={2},
-        allow_fail=True,
-    )
-    steps.append(sync)
-    _log_step_summary(sync)
+        if inva.exit_code != 0:
+            final_result = RunResult.FAILED
+            return RunSummary(final_result, steps)
 
-    if sync.exit_code == 2:
-        return RunSummary(overall=RunResult.OAUTH_QUOTA, steps=steps)
+        # ------------------------------------------------------------
+        # Playlist Sync (OAuth mutation)
+        # ------------------------------------------------------------
+        sync = run_stage(
+            script="youtube_playlist_sync.py",
+            name="Playlist Sync",
+            stop_on_codes={2},
+            allow_fail=True,
+        )
+        steps.append(sync)
+        if ui:
+            ui.mark_stage("Playlist Sync", _stage_status("Playlist Sync", sync.exit_code))
 
-    # ------------------------------------------------------------
-    # Overall summary
-    # ------------------------------------------------------------
-    logger.info(PLAYLISTARR_HEADER("Run Summary"))
+        if sync.exit_code == 2:
+            final_result = RunResult.OAUTH_QUOTA
+            return RunSummary(final_result, steps)
 
-    def _is_clean_quota_stop(s: StepResult) -> bool:
-        # OAuth quota
-        if s.name in ("invalidate_apply", "sync") and s.exit_code == 1:
-            return True
+        if sync.exit_code != 0:
+            final_result = RunResult.FAILED
+            return RunSummary(final_result, steps)
 
-        # API key quota (discovery)
-        if s.name == "discover" and s.exit_code == 1:
-            return True
+        final_result = RunResult.OK
+        return RunSummary(final_result, steps)
 
-        return False
+    except KeyboardInterrupt:
+        # Still emit RUN_STATUS and close UI in finally.
+        final_result = RunResult.FAILED
+        raise
 
-    ok = True
-    for s in steps:
-        if s.exit_code == 0:
-            continue
-        if _is_clean_quota_stop(s):
-            continue
-        if s.name == "cleanup":
-            continue
-        ok = False
-        break
+    except Exception:
+        # Still emit RUN_STATUS and close UI in finally.
+        final_result = RunResult.FAILED
+        raise
 
-    if ok:
-        if any(_is_clean_quota_stop(s) for s in steps):
-            logger.warning("Overall: STOPPED BY QUOTA")
-            if any(s.name == "sync" for s in steps if _is_clean_quota_stop(s)):
-                return RunSummary(overall=RunResult.OAUTH_QUOTA, steps=steps)
-            return RunSummary(overall=RunResult.API_QUOTA, steps=steps)
+    finally:
+        # Persist final run status to log (machine-readable, exactly once).
+        # This MUST happen regardless of early returns or exceptions.
+        try:
+            logger.info(f"RUN_STATUS={final_result.value}")
+        except Exception:
+            pass
 
-        logger.info("Overall: OK")
-        return RunSummary(overall=RunResult.OK, steps=steps)
-
-    logger.error("Overall: FAILED")
-    return RunSummary(overall=RunResult.FAILED, steps=steps)
-
+        if ui:
+            try:
+                ui.summary.stop_reason = final_result.value
+                ui.stop()
+                ui.print_summary()
+            except Exception:
+                pass
