@@ -1,6 +1,8 @@
 def test_quota_exceeded_is_ok():
     from auth.providers.youtube import _is_quota_exceeded_error
+
     # fabricate HttpError-like object
+
 
 from auth.base import AuthHealthStatus
 

@@ -15,6 +15,7 @@ from env import PROFILES_DIR
 # Profiles
 # ------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class Profile:
     name: str
@@ -89,22 +90,43 @@ def _set_run_env_manual(args: argparse.Namespace) -> None:
 # Parser
 # ------------------------------------------------------------
 
+
 def build_sync_parser(subparsers: argparse._SubParsersAction) -> None:
     def add_common_flags(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--force", action="store_true", help="Force re-processing (discovery)")
-        sp.add_argument("--no-filter", action="store_true", help="Disable filters (if supported)")
-        sp.add_argument("--dry-run", action="store_true", help="Dry run where supported")
-        sp.add_argument("--max-add", type=int, default=0, help="Max videos to add (0 = unlimited)")
-        sp.add_argument("--progress-every", type=int, default=50, help="Progress update cadence")
+        sp.add_argument(
+            "--force", action="store_true", help="Force re-processing (discovery)"
+        )
+        sp.add_argument(
+            "--no-filter", action="store_true", help="Disable filters (if supported)"
+        )
+        sp.add_argument(
+            "--dry-run", action="store_true", help="Dry run where supported"
+        )
+        sp.add_argument(
+            "--max-add", type=int, default=0, help="Max videos to add (0 = unlimited)"
+        )
+        sp.add_argument(
+            "--progress-every", type=int, default=50, help="Progress update cadence"
+        )
 
         sp.add_argument("--verbose", action="store_true", help="Verbose console logs")
-        sp.add_argument("--quiet", action="store_true", help="No console logs (file logs still written)")
+        sp.add_argument(
+            "--quiet",
+            action="store_true",
+            help="No console logs (file logs still written)",
+        )
 
-    sync = subparsers.add_parser("sync", help="Run the full pipeline using a profile name")
-    sync.add_argument("profile", help="Profile name (profiles/<name>.json + profiles/<name>.csv)")
+    sync = subparsers.add_parser(
+        "sync", help="Run the full pipeline using a profile name"
+    )
+    sync.add_argument(
+        "profile", help="Profile name (profiles/<name>.json + profiles/<name>.csv)"
+    )
     add_common_flags(sync)
 
-    run = subparsers.add_parser("run", help="Run the full pipeline using explicit inputs")
+    run = subparsers.add_parser(
+        "run", help="Run the full pipeline using explicit inputs"
+    )
     run.add_argument("--csv", required=True, help="Artist CSV path")
     run.add_argument("--playlist", required=True, help="YouTube playlist ID")
     add_common_flags(run)
@@ -113,6 +135,7 @@ def build_sync_parser(subparsers: argparse._SubParsersAction) -> None:
 # ------------------------------------------------------------
 # Handler
 # ------------------------------------------------------------
+
 
 def handle_sync(args: argparse.Namespace) -> int:
     # Set PLAYLISTARR_* env vars before importing anything else

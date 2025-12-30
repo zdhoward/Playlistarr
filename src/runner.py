@@ -25,11 +25,11 @@ logger = get_logger("runner")
 
 
 class RunResult(Enum):
-    OK = "completed"          # ran fully, up-to-date
-    API_QUOTA = "api_quota"   # controlled stop (discovery quota)
+    OK = "completed"  # ran fully, up-to-date
+    API_QUOTA = "api_quota"  # controlled stop (discovery quota)
     OAUTH_QUOTA = "oauth_quota"  # controlled stop (oauth quota)
     AUTH_INVALID = "auth_invalid"  # action required
-    FAILED = "failed"         # unexpected failure
+    FAILED = "failed"  # unexpected failure
 
 
 @dataclass
@@ -192,7 +192,9 @@ def _apply_ui_event(ui: InteractiveUI, evt: dict) -> None:
     event = evt.get("event")
 
     if event == "stage_start":
-        ui.set_stage(evt.get("stage", ""), index=evt.get("index", 0), total=evt.get("total", 0))
+        ui.set_stage(
+            evt.get("stage", ""), index=evt.get("index", 0), total=evt.get("total", 0)
+        )
         ui.set_task(evt.get("task", ""))
         return
 
@@ -229,7 +231,6 @@ def run_once() -> RunSummary:
     final_result: RunResult = RunResult.FAILED
 
     def run_stage(**kw) -> StepResult:
-        nonlocal ui
         if interactive:
             assert ui is not None
             return _run_script_interactive(ui=ui, **kw)
@@ -245,10 +246,15 @@ def run_once() -> RunSummary:
         # ------------------------------------------------------------
         # OAuth Health
         # ------------------------------------------------------------
-        oauth = run_stage(script="oauth_health_check.py", name="OAuth Health Check", stop_on_codes={2})
+        oauth = run_stage(
+            script="oauth_health_check.py", name="OAuth Health Check", stop_on_codes={2}
+        )
         steps.append(oauth)
         if ui:
-            ui.mark_stage("OAuth Health Check", _stage_status("OAuth Health Check", oauth.exit_code))
+            ui.mark_stage(
+                "OAuth Health Check",
+                _stage_status("OAuth Health Check", oauth.exit_code),
+            )
 
         if oauth.exit_code == 2:
             final_result = RunResult.AUTH_INVALID
@@ -261,7 +267,9 @@ def run_once() -> RunSummary:
         # ------------------------------------------------------------
         # Discovery (API keys)
         # ------------------------------------------------------------
-        disc = run_stage(script="discover_music_videos.py", name="Discovery", allow_fail=True)
+        disc = run_stage(
+            script="discover_music_videos.py", name="Discovery", allow_fail=True
+        )
         steps.append(disc)
         if ui:
             ui.mark_stage("Discovery", _stage_status("Discovery", disc.exit_code))
@@ -283,7 +291,9 @@ def run_once() -> RunSummary:
         invp = run_stage(script="playlist_invalidate.py", name="Invalidation Plan")
         steps.append(invp)
         if ui:
-            ui.mark_stage("Invalidation Plan", _stage_status("Invalidation Plan", invp.exit_code))
+            ui.mark_stage(
+                "Invalidation Plan", _stage_status("Invalidation Plan", invp.exit_code)
+            )
 
         if invp.exit_code != 0:
             final_result = RunResult.FAILED
@@ -300,7 +310,10 @@ def run_once() -> RunSummary:
         )
         steps.append(inva)
         if ui:
-            ui.mark_stage("Invalidation Apply", _stage_status("Invalidation Apply", inva.exit_code))
+            ui.mark_stage(
+                "Invalidation Apply",
+                _stage_status("Invalidation Apply", inva.exit_code),
+            )
 
         # In your current pipeline, apply uses exit_code 2 for OAuth quota exhaustion
         if inva.exit_code == 2:
@@ -322,7 +335,9 @@ def run_once() -> RunSummary:
         )
         steps.append(sync)
         if ui:
-            ui.mark_stage("Playlist Sync", _stage_status("Playlist Sync", sync.exit_code))
+            ui.mark_stage(
+                "Playlist Sync", _stage_status("Playlist Sync", sync.exit_code)
+            )
 
         if sync.exit_code == 2:
             final_result = RunResult.OAUTH_QUOTA

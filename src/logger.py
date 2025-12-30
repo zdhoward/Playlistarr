@@ -26,6 +26,7 @@ _MESSAGE_COLUMN = 12
 # Public API
 # ---------------------------------------------------------------------
 
+
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
@@ -54,9 +55,8 @@ def init_logging() -> None:
     # -----------------------------------------------------------------
 
     command = os.environ.get("PLAYLISTARR_COMMAND") or "bootstrap"
-    profile = (
-        os.environ.get("PLAYLISTARR_PROFILE")
-        or os.environ.get("PLAYLISTARR_PROFILE_NAME")
+    profile = os.environ.get("PLAYLISTARR_PROFILE") or os.environ.get(
+        "PLAYLISTARR_PROFILE_NAME"
     )
 
     # -----------------------------------------------------------------
@@ -107,9 +107,7 @@ def init_logging() -> None:
     file_handler = logging.FileHandler(target_log_file, encoding="utf-8")
     file_handler.setLevel(logging.DEBUG)
     file_handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s | [%(levelname)s] | %(name)s | %(message)s"
-        )
+        logging.Formatter("%(asctime)s | [%(levelname)s] | %(name)s | %(message)s")
     )
     handlers.append(file_handler)
 
@@ -171,6 +169,7 @@ def init_logging() -> None:
 # ---------------------------------------------------------------------
 # Internals
 # ---------------------------------------------------------------------
+
 
 def _repoint_file_handler(new_logfile: Path) -> None:
     root = logging.getLogger()

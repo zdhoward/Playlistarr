@@ -1,10 +1,17 @@
 # **Playlistarr**
 
-**Version:** 1.2
+---
+![CI](https://github.com/zdhoward/playlistarr/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/github/license/zdhoward/playlistarr)
+![Last Commit](https://img.shields.io/github/last-commit/zdhoward/playlistarr)
+![Status](https://img.shields.io/badge/status-beta-yellow)
+
+### **Version:** 1.2.1
 
 Playlistarr is a **production-grade YouTube playlist automation engine** for homelabbers and self-hosters.
 
-It discovers official music videos for artists, applies deterministic filtering rules, and keeps YouTube playlists continuously in sync — **while being fully quota-aware, resumable, and log-driven**.
+It discovers official music videos for artists, applies deterministic filtering rules, and keeps YouTube playlists continuously in sync - **while being fully quota-aware, resumable, and log-driven**.
 
 This is not a “download everything” scraper.
 It is a **self-healing playlist maintenance system** designed to run safely over time with minimal supervision.

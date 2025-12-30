@@ -49,7 +49,9 @@ def build_profiles_parser(subparsers: argparse._SubParsersAction) -> None:
     clone.set_defaults(action="clone")
 
     validate = psub.add_parser("validate", help="Validate profiles")
-    validate.add_argument("name", nargs="?", help="Profile name (omit to validate all profiles)")
+    validate.add_argument(
+        "name", nargs="?", help="Profile name (omit to validate all profiles)"
+    )
     validate.set_defaults(action="validate")
 
 
@@ -120,7 +122,11 @@ def handle_profiles(args: argparse.Namespace) -> int:
         print(f"CSV:       {csv_path}")
         print(f"playlist:  {(data.get('playlist_id') or '').strip()}")
         print(f"label:     {(data.get('label') or '').strip()}")
-        print("rules:     present" if isinstance(data.get("rules"), dict) else "rules:     missing/invalid")
+        print(
+            "rules:     present"
+            if isinstance(data.get("rules"), dict)
+            else "rules:     missing/invalid"
+        )
         if csv_path.exists():
             artists = _read_artists_csv(csv_path)
             print(f"artists:   {len(artists)}")
@@ -138,7 +144,11 @@ def handle_profiles(args: argparse.Namespace) -> int:
 
         json_path.write_text(
             json.dumps(
-                {"label": args.label or args.name, "playlist_id": args.playlist, "rules": {}},
+                {
+                    "label": args.label or args.name,
+                    "playlist_id": args.playlist,
+                    "rules": {},
+                },
                 indent=2,
             ),
             encoding="utf-8",

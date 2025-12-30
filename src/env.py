@@ -10,6 +10,7 @@ from typing import Optional
 # Errors
 # ============================================================
 
+
 class ConfigError(RuntimeError):
     pass
 
@@ -27,6 +28,7 @@ ENV_FILE = CONFIG_DIR / ".env"
 # ============================================================
 # Internal dotenv loader
 # ============================================================
+
 
 def _load_dotenv() -> None:
     """
@@ -51,8 +53,10 @@ def _load_dotenv() -> None:
         if k not in os.environ:
             os.environ[k] = v
 
+
 # Load .env once into process env before anything else
 _load_dotenv()
+
 
 def _require(name: str) -> str:
     v = os.environ.get(name)
@@ -64,6 +68,7 @@ def _require(name: str) -> str:
 # ============================================================
 # Environment object (frozen per run)
 # ============================================================
+
 
 class Environment:
     def __init__(self):
@@ -115,7 +120,67 @@ class Environment:
 
         # Interactive console UI ("normal" mode). Runner-only.
         self.no_ui = os.environ.get("PLAYLISTARR_NO_UI", "0") == "1"
-        self.interactive = (not self.verbose) and (not self.quiet) and (not self.no_ui) and sys.stdout.isatty()
+        self.interactive = (
+            (not self.verbose)
+            and (not self.quiet)
+            and (not self.no_ui)
+            and sys.stdout.isatty()
+        )
+
+
+# ============================================================
+# Logging-safe environment (no required secrets)
+# ============================================================
+
+
+class LoggingEnvironment:
+    """
+    Minimal env subset for bootstrap logging / CLI help / auth / tests.
+
+    This MUST NOT require API keys or pipeline vars.
+    """
+
+    def __init__(self):
+        self.raw = dict(os.environ)
+
+        self.log_level = os.environ.get("LOG_LEVEL", "INFO")
+        self.log_format = os.environ.get("LOG_FORMAT", "text")
+
+        # Keep compatible with existing env conventions.
+        # logger/log_paths may also look at PLAYLISTARR_LOGS_DIR directly.
+        self.log_dir = os.environ.get(
+            "PLAYLISTARR_RUN_LOG_DIR",
+            os.environ.get("LOG_DIR", "../logs"),
+        )
+
+        self.log_retention = int(os.environ.get("LOG_RETENTION", "10"))
+
+        self.verbose = os.environ.get("PLAYLISTARR_VERBOSE", "0") == "1"
+        self.quiet = os.environ.get("PLAYLISTARR_QUIET", "0") == "1"
+
+        # Logger console behavior: treat "interactive" as "suppress console logging"
+        # if explicitly disabled or not a TTY.
+        no_ui = os.environ.get("PLAYLISTARR_NO_UI", "0") == "1"
+        self.interactive = (
+            (not self.verbose)
+            and (not self.quiet)
+            and (not no_ui)
+            and sys.stdout.isatty()
+        )
+
+
+_LOG_ENV: Optional[LoggingEnvironment] = None
+
+
+def get_logging_env() -> LoggingEnvironment:
+    """
+    Return the frozen LoggingEnvironment for this process.
+    Safe in CI and unit tests without any credentials.
+    """
+    global _LOG_ENV
+    if _LOG_ENV is None:
+        _LOG_ENV = LoggingEnvironment()
+    return _LOG_ENV
 
 
 # ============================================================
@@ -139,6 +204,7 @@ def get_env() -> Environment:
 # ============================================================
 # Export to cmd.exe
 # ============================================================
+
 
 def export_cmd():
     """

@@ -3,36 +3,36 @@
 # ============================================================
 
 # OAuth credentials
-auth/*.json
+auth/
 !auth/README.md
 
 # Environment variables
-.env
-.env.local
-.env.*.local
+.env*
+!.env.example
 
 # API keys (if accidentally created as files)
 *api_keys*
 *secrets*
 *.key
 
+
 # ============================================================
 # CACHE AND OUTPUT (GENERATED DATA)
 # ============================================================
 
 # Playlist caches
-cache/*.json
+cache/
 !cache/README.md
 
 # Discovery output
-out/*.json
-out/*
+out/
 !out/README.md
 
 # Logs
-logs/**/
+logs/
 *.log
 !logs/README.md
+
 
 # ============================================================
 # PYTHON
@@ -94,7 +94,6 @@ coverage.xml
 *.pot
 
 # Django stuff:
-*.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -161,6 +160,7 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+
 # ============================================================
 # IDE / EDITOR
 # ============================================================
@@ -189,6 +189,7 @@ dmypy.json
 /.emacs.desktop.lock
 *.elc
 
+
 # ============================================================
 # OPERATING SYSTEM
 # ============================================================
@@ -213,6 +214,7 @@ $RECYCLE.BIN/
 .directory
 .Trash-*
 
+
 # ============================================================
 # PROJECT-SPECIFIC
 # ============================================================
@@ -228,7 +230,7 @@ temp/
 test_data/
 !tests/fixtures/
 
-# Local configuration overrides (if you create them)
+# Local configuration overrides
 config.local.py
 config_override.py
 
@@ -241,7 +243,9 @@ config_override.py
 *.tar.gz
 *.rar
 
+# Compiled python leftovers
 *.pyc
 
+# Project docs generated during refactors/releases
 REFACTORING_SUMMARY.md
 V1_RELEASE_SUMMARY.md

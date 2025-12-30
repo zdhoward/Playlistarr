@@ -14,6 +14,7 @@ from rich.text import Text
 # Parser
 # ------------------------------------------------------------
 
+
 def build_auth_parser(subparsers: argparse._SubParsersAction) -> None:
     auth = subparsers.add_parser(
         "auth",
@@ -36,6 +37,7 @@ def build_auth_parser(subparsers: argparse._SubParsersAction) -> None:
 # ------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------
+
 
 def _set_output_env(args: argparse.Namespace) -> None:
     os.environ["PLAYLISTARR_VERBOSE"] = "1" if args.verbose else "0"
@@ -66,6 +68,7 @@ def _is_verbose() -> bool:
 # ------------------------------------------------------------
 # Handler
 # ------------------------------------------------------------
+
 
 def handle_auth(args: argparse.Namespace) -> int:
     _set_output_env(args)
@@ -105,7 +108,9 @@ def handle_auth(args: argparse.Namespace) -> int:
 
     if result.status == AuthHealthStatus.AUTH_INVALID:
         if not quiet:
-            console.print(Text("OAuth INVALID – reauthentication required", style="red"))
+            console.print(
+                Text("OAuth INVALID – reauthentication required", style="red")
+            )
         return 2
 
     # FAILED

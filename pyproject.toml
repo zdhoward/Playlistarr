@@ -2,31 +2,75 @@
 requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
+# -------------------------------------------------
+# Packaging
+# -------------------------------------------------
+
 [tool.setuptools]
-package-dir = {"" = "src"}
+package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+# -------------------------------------------------
+# Project metadata
+# -------------------------------------------------
+
 [project]
 name = "playlistarr"
-version = "0.1.0"
-description = "YouTube playlist synchronization and management tool"
+version = "1.2.0"
+description = "Quota-aware, log-driven YouTube playlist automation engine"
 requires-python = ">=3.10"
 
+authors = [
+    { name = "Zach Howard", email = "zdhoward@users.noreply.github.com" }
+]
+
+readme = "README.md"
+license = { text = "MIT" }
+
+keywords = [
+    "youtube",
+    "playlist",
+    "automation",
+    "homelab",
+    "cli",
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+]
+
+# -------------------------------------------------
+# Runtime dependencies
+# -------------------------------------------------
+
 dependencies = [
+    # Google / YouTube
     "google-api-python-client>=2.100.0",
     "google-auth>=2.23.0",
     "google-auth-oauthlib>=1.1.0",
     "google-auth-httplib2>=0.1.1",
 
+    # Core utilities
     "requests>=2.31.0",
     "isodate>=0.6.1",
     "python-dotenv>=1.0.0",
 
-    "structlog>=23.1.0",
-    "python-json-logger>=2.0.7",
+    # CLI / logging
+    "rich>=13.7.0",
 ]
+
+# -------------------------------------------------
+# Optional dependencies
+# -------------------------------------------------
 
 [project.optional-dependencies]
 dev = [
@@ -36,8 +80,22 @@ dev = [
     "black>=24.0.0",
     "flake8>=6.1.0",
     "types-requests>=2.31.0",
+    "pre-commit>=3.7.0",
 ]
 
+
+# -------------------------------------------------
+# Tooling configuration
+# -------------------------------------------------
 [tool.black]
 line-length = 88
 target-version = ["py310"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+strict = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

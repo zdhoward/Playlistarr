@@ -17,6 +17,7 @@ from cli.common import (
 # Run status inference
 # ============================================================================
 
+
 def infer_run_status(log_path: Path) -> str:
     """
     Infer run status from log file.
@@ -55,6 +56,7 @@ def infer_run_status(log_path: Path) -> str:
 # CLI wiring
 # ============================================================================
 
+
 def build_runs_parser(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("runs", help="Inspect past runs (log-driven)")
     sp = p.add_subparsers(dest="runs_cmd", required=True)
@@ -90,12 +92,14 @@ def handle_runs(args: argparse.Namespace) -> int:
         for p in logs:
             stat = infer_run_status(p)
             ts = datetime.fromtimestamp(p.stat().st_mtime)
-            rows.append([
-                p.stem,
-                stat,
-                ts.strftime("%Y-%m-%d %H:%M:%S"),
-                f"{p.stat().st_size} bytes",
-            ])
+            rows.append(
+                [
+                    p.stem,
+                    stat,
+                    ts.strftime("%Y-%m-%d %H:%M:%S"),
+                    f"{p.stat().st_size} bytes",
+                ]
+            )
         print_table(["run_id", "state", "time", "size"], rows)
         return 0
 
@@ -108,10 +112,7 @@ def handle_runs(args: argparse.Namespace) -> int:
         stat = infer_run_status(p)
         ts = datetime.fromtimestamp(p.stat().st_mtime)
 
-        print(
-            f"{p.stem}  {stat}  "
-            f"{ts.strftime('%Y-%m-%d %H:%M:%S')}  {p}"
-        )
+        print(f"{p.stem}  {stat}  " f"{ts.strftime('%Y-%m-%d %H:%M:%S')}  {p}")
         return 0
 
     if args.runs_cmd == "show":

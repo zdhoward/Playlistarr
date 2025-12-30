@@ -3,7 +3,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from cli.common import dispatch_subparser_help, find_log_file, print_tail, resolve_log_dir
+from cli.common import (
+    dispatch_subparser_help,
+    find_log_file,
+    print_tail,
+    resolve_log_dir,
+)
 
 
 def build_logs_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -29,9 +34,13 @@ def build_logs_parser(subparsers: argparse._SubParsersAction) -> None:
 
 def handle_logs(args: argparse.Namespace) -> int:
     if args.action == "help":
-        return dispatch_subparser_help(args._help_parser, list(getattr(args, "path", []) or []))
+        return dispatch_subparser_help(
+            args._help_parser, list(getattr(args, "path", []) or [])
+        )
 
-    log_dir = resolve_log_dir(profile=getattr(args, "profile", None), explicit=getattr(args, "dir", None))
+    log_dir = resolve_log_dir(
+        profile=getattr(args, "profile", None), explicit=getattr(args, "dir", None)
+    )
 
     if args.action == "list":
         if not log_dir.exists():

@@ -16,6 +16,7 @@ os.chdir(PROJECT_ROOT)
 # Minimal dotenv loader (silent, production-safe)
 # ------------------------------------------------------------
 
+
 def _load_dotenv(path: Path) -> None:
     if not path.exists():
         return
@@ -45,6 +46,7 @@ def _load_dotenv(path: Path) -> None:
 # Help routing
 # ------------------------------------------------------------
 
+
 def _dispatch_help(parser: argparse.ArgumentParser, argv: list[str]) -> int:
     if not argv:
         parser.print_help()
@@ -68,6 +70,7 @@ def _dispatch_help(parser: argparse.ArgumentParser, argv: list[str]) -> int:
 # ------------------------------------------------------------
 # CLI construction
 # ------------------------------------------------------------
+
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="playlistarr")
@@ -96,6 +99,7 @@ def build_parser() -> argparse.ArgumentParser:
 # Main entrypoint
 # ------------------------------------------------------------
 
+
 def main() -> int:
     parser = build_parser()
     args, unknown = parser.parse_known_args()
@@ -110,29 +114,34 @@ def main() -> int:
     if "PLAYLISTARR_RUN_ID" not in os.environ:
         os.environ["PLAYLISTARR_RUN_ID"] = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-    # 🔑 THIS WAS MISSING — EXPORT COMMAND FOR LOGGER
+    # 🔑 THIS WAS MISSING - EXPORT COMMAND FOR LOGGER
     os.environ.setdefault("PLAYLISTARR_COMMAND", args.command)
 
     _load_dotenv(PROJECT_ROOT / ".env")
 
     if args.command in ("sync", "run"):
         from cli.cli_sync import handle_sync
+
         return handle_sync(args)
 
     if args.command == "profiles":
         from cli.cli_profiles import handle_profiles
+
         return handle_profiles(args)
 
     if args.command == "runs":
         from cli.cli_runs import handle_runs
+
         return handle_runs(args)
 
     if args.command == "logs":
         from cli.cli_logs import handle_logs
+
         return handle_logs(args)
 
     if args.command == "auth":
         from cli.cli_auth import handle_auth
+
         return handle_auth(args)
 
     raise RuntimeError(f"Unknown command: {args.command}")

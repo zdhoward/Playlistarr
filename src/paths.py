@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 # Base directories (override-friendly)
 # ---------------------------------------------------------------------
 
+
 def _resolve_dir(env_var: str, default: Path) -> Path:
     """
     Resolve a directory path from an environment variable or default.
@@ -59,6 +60,7 @@ OUT_DIR = _resolve_dir(
 # Utility / internal paths
 # ---------------------------------------------------------------------
 
+
 def auth_token_file(filename: str = "oauth_token.json") -> Path:
     """
     Path to an auth token file inside AUTH_DIR.
@@ -90,6 +92,7 @@ def out_file(name: str) -> Path:
 # ---------------------------------------------------------------------
 # Log layout helpers (used later by logger)
 # ---------------------------------------------------------------------
+
 
 def module_logs_dir(module: str) -> Path:
     """

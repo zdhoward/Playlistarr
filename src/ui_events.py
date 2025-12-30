@@ -30,7 +30,9 @@ def emit_ui_event(event: str, **fields: Any) -> None:
 
     payload: Dict[str, Any] = {"event": event, **fields}
     try:
-        line = _UI_PREFIX + json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        line = _UI_PREFIX + json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        )
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
     except Exception:
@@ -42,7 +44,7 @@ def try_parse_ui_event(line: str) -> Dict[str, Any] | None:
     """Parse a UI event line emitted by emit_ui_event()."""
     if not line.startswith(_UI_PREFIX):
         return None
-    raw = line[len(_UI_PREFIX):].strip()
+    raw = line[len(_UI_PREFIX) :].strip()
     if not raw:
         return None
     try:

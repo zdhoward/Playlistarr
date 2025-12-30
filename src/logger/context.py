@@ -18,7 +18,6 @@ def resolve_command() -> str:
 
 
 def resolve_profile() -> Optional[str]:
-    return (
-        os.environ.get("PLAYLISTARR_PROFILE")
-        or os.environ.get("PLAYLISTARR_PROFILE_NAME")
+    return os.environ.get("PLAYLISTARR_PROFILE") or os.environ.get(
+        "PLAYLISTARR_PROFILE_NAME"
     )

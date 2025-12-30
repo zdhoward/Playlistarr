@@ -22,9 +22,7 @@ def build_file_handler(logfile: Path) -> logging.FileHandler:
     handler = logging.FileHandler(logfile, encoding="utf-8")
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(
-        logging.Formatter(
-            "%(asctime)s | [%(levelname)s] | %(name)s | %(message)s"
-        )
+        logging.Formatter("%(asctime)s | [%(levelname)s] | %(name)s | %(message)s")
     )
     return handler
 

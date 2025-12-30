@@ -1,0 +1,81 @@
+repos:
+  # ----------------------------
+  # Formatting
+  # ----------------------------
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        language_version: python3.10
+
+  # ----------------------------
+  # Linting (hard errors only)
+  # ----------------------------
+  - repo: https://github.com/PyCQA/flake8
+    rev: 6.1.0
+    hooks:
+      - id: flake8
+        args:
+          - --count
+          - --select=E9,F63,F7,F82
+          - --show-source
+          - --statistics
+
+  # ----------------------------
+  # Generic hygiene
+  # ----------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-json
+      - id: check-added-large-files
+        args: ["--maxkb=100"]
+
+  # ----------------------------
+  # Project-specific hooks
+  # ----------------------------
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest -q
+        language: system
+        pass_filenames: false
+
+      - id: secret-scan
+        name: simple secret scan
+        entry: |
+          python - <<'EOF'
+          import sys, re, pathlib
+
+          patterns = [
+              re.compile(r"AIzaSy[A-Za-z0-9_-]{33}"),
+              re.compile(r"client_secrets\.json"),
+              re.compile(r"oauth", re.I),
+          ]
+
+          bad = False
+
+          for p in pathlib.Path(".").rglob("*"):
+              if not p.is_file():
+                  continue
+              if p.suffix in {".pyc", ".png", ".jpg", ".jpeg", ".gif"}:
+                  continue
+
+              try:
+                  text = p.read_text(errors="ignore")
+              except Exception:
+                  continue
+
+              for pat in patterns:
+                  if pat.search(text):
+                      print(f"Secret pattern found in {p}")
+                      bad = True
+
+          sys.exit(1 if bad else 0)
+          EOF
+        language: system
+        pass_filenames: false

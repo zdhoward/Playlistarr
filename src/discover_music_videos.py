@@ -296,10 +296,10 @@ class YouTubeAPI:
             return []
 
     def search_channel_videos(
-            self,
-            query: str,
-            channel_id: Optional[str] = None,
-            max_results: int = 25,
+        self,
+        query: str,
+        channel_id: Optional[str] = None,
+        max_results: int = 25,
     ) -> List[Dict[str, Any]]:
         try:
             params = {
@@ -615,6 +615,7 @@ def is_viable_channel(api: YouTubeAPI, channel_id: str) -> bool:
     except Exception as e:
         logger.warning(f"Uploads check failed for {metadata.channel_title}: {e}")
         return False
+
 
 def resolve_artist_channel(
     api: YouTubeAPI, artist: str
@@ -944,8 +945,12 @@ def main() -> int:
                     new=stats.accepted,
                 )
             except QuotaExhaustedError:
-                logger.warning("YouTube API quota exhausted — stopping discovery")
-                emit_ui_event("detail", line="YouTube API quota exhausted — stopping discovery", style="yellow")
+                logger.warning("YouTube API quota exhausted - stopping discovery")
+                emit_ui_event(
+                    "detail",
+                    line="YouTube API quota exhausted - stopping discovery",
+                    style="yellow",
+                )
                 return 2
 
             except Exception as e:
@@ -965,5 +970,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except QuotaExhaustedError:
-        logger.warning("YouTube API quota exhausted — stopping")
+        logger.warning("YouTube API quota exhausted - stopping")
         sys.exit(2)

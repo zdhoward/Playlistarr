@@ -14,7 +14,10 @@ from env import PROJECT_ROOT
 # Help dispatch (subparser-local)
 # ----------------------------
 
-def dispatch_subparser_help(parser: argparse.ArgumentParser, path: list[str] | None) -> int:
+
+def dispatch_subparser_help(
+    parser: argparse.ArgumentParser, path: list[str] | None
+) -> int:
     """
     Implements consistent `X help [subcmd ...]` behavior for a subtree parser.
     """
@@ -32,6 +35,7 @@ def dispatch_subparser_help(parser: argparse.ArgumentParser, path: list[str] | N
 # ----------------------------
 # Logs / runs filesystem helpers
 # ----------------------------
+
 
 def resolve_log_dir(*, profile: str | None, explicit: str | None) -> Path:
     if explicit:
@@ -91,6 +95,7 @@ tail_file = _print_tail_impl
 # Run status inference (log-driven)
 # ----------------------------
 
+
 def infer_run_status(path: Path) -> str:
     """
     Primary signal: RUN_STATUS=<value>
@@ -133,6 +138,7 @@ def infer_run_status(path: Path) -> str:
 # Run listing models
 # ----------------------------
 
+
 @dataclass(frozen=True)
 class RunFile:
     run_id: str
@@ -171,6 +177,7 @@ def format_mtime(ts: float) -> str:
 # ----------------------------
 # CLI output helpers
 # ----------------------------
+
 
 def print_table(headers: list[str], rows: list[list[str]]) -> None:
     """

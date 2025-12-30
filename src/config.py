@@ -52,7 +52,7 @@ MAX_RETRIES = int(os.environ.get("YT_MAX_RETRIES", "3"))
 BACKOFF_BASE_SEC = float(os.environ.get("YT_BACKOFF_BASE_SEC", "1.0"))
 
 # ============================================================
-# YOUTUBE API — ENDPOINTS / SCOPES
+# YOUTUBE API - ENDPOINTS / SCOPES
 # ============================================================
 
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
@@ -84,7 +84,7 @@ DEFAULT_CACHE_TTL_SECONDS = 6 * 60 * 60
 YOUTUBE_BATCH_SIZE = 50
 
 # ============================================================
-# DISCOVERY — CHANNEL RESOLUTION
+# DISCOVERY - CHANNEL RESOLUTION
 # ============================================================
 
 MIN_UPLOADS_FOR_VIABLE_CHANNEL = 5
@@ -102,7 +102,7 @@ OFFICIAL_SEARCH_QUERIES = [
 ]
 
 # ============================================================
-# TITLE CLASSIFICATION — POSITIVE SIGNALS
+# TITLE CLASSIFICATION - POSITIVE SIGNALS
 # ============================================================
 
 POSITIVE_TITLE_STRONG = [
@@ -115,7 +115,7 @@ POSITIVE_TITLE_WEAK = [
 ]
 
 # ============================================================
-# TITLE CLASSIFICATION — HARD REJECTS
+# TITLE CLASSIFICATION - HARD REJECTS
 # ============================================================
 
 NEGATIVE_TITLE_HARD = [
@@ -154,7 +154,7 @@ NEGATIVE_TITLE_HARD = [
 ]
 
 # ============================================================
-# TITLE CLASSIFICATION — SOFT REJECTS
+# TITLE CLASSIFICATION - SOFT REJECTS
 # ============================================================
 
 NEGATIVE_TITLE_SOFT = [

@@ -21,6 +21,7 @@ _DOTS = ("", ".", "..", "...")
 # State Models
 # ============================================================================
 
+
 @dataclass
 class UIState:
     # Stage-level
@@ -65,6 +66,7 @@ class UISummary:
 # ============================================================================
 # Interactive UI
 # ============================================================================
+
 
 class InteractiveUI:
     """
@@ -129,7 +131,7 @@ class InteractiveUI:
             self.summary.end_time = time.time()
 
     # ------------------------------------------------------------------
-    # Public API — state updates
+    # Public API - state updates
     # ------------------------------------------------------------------
 
     def push_history(self, line: str) -> None:
@@ -168,7 +170,9 @@ class InteractiveUI:
     def set_removed(self, removed: int) -> None:
         self.summary.removed_items = int(removed)
 
-    def set_api_key(self, *, index: int | None = None, total: int | None = None) -> None:
+    def set_api_key(
+        self, *, index: int | None = None, total: int | None = None
+    ) -> None:
         if index is not None:
             self.state.api_key_index = int(index)
         if total is not None:
@@ -194,7 +198,9 @@ class InteractiveUI:
         if completed is not None:
             self.state.progress_completed = int(completed)
             if self._task_id is not None:
-                self._progress.update(self._task_id, completed=self.state.progress_completed)
+                self._progress.update(
+                    self._task_id, completed=self.state.progress_completed
+                )
 
     # ------------------------------------------------------------------
     # Rendering
@@ -202,7 +208,9 @@ class InteractiveUI:
 
     def render(self, *, force: bool = False) -> None:
         now = time.time()
-        if not force and (now - self._last_render) < (1.0 / max(1, self.refresh_per_second)):
+        if not force and (now - self._last_render) < (
+            1.0 / max(1, self.refresh_per_second)
+        ):
             return
 
         self._last_render = now
@@ -271,7 +279,9 @@ class InteractiveUI:
 
     def _ensure_progress_task(self, label: str, total: int | None) -> None:
         if self._task_id is None:
-            self._task_id = self._progress.add_task(label or "Progress", total=total or 100)
+            self._task_id = self._progress.add_task(
+                label or "Progress", total=total or 100
+            )
             return
 
         if label:

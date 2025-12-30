@@ -12,7 +12,7 @@
 
 ### 2. Security Audit
 - [ ] No API keys in code
-- [ ] No OAuth tokens in code  
+- [ ] No OAuth tokens in code
 - [ ] No credentials in git history
 - [ ] `.gitignore` comprehensive
 - [ ] `auth/`, `cache/`, `out/` ignored
@@ -99,7 +99,7 @@ git tag -a v1.0.0 -m "Release v1.0.0 - Production Ready
 
 First production-ready release with:
 - Stateful, resumable discovery
-- Quota-aware API management  
+- Quota-aware API management
 - Quality-based video replacement
 - Comprehensive documentation
 - Security hardened
@@ -178,7 +178,7 @@ mypy *.py --ignore-missing-imports
 ### Test Imports
 ```bash
 python -c "import config; print('OK')"
-python -c "import filters; print('OK')"  
+python -c "import filters; print('OK')"
 python -c "import utils; print('OK')"
 python -c "from client import get_youtube_client; print('OK')"
 ```

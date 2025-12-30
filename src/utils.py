@@ -136,7 +136,6 @@ def discovery_output_path(csv_stem: str, artist: str) -> Path:
     return out_root
 
 
-
 # ============================================================
 # File I/O Helpers
 # ============================================================
@@ -234,11 +233,9 @@ def safe_mkdir(path: Path) -> None:
     ensure_directory(path)
 
 
-
 # ============================================================
 # Normalization
 # ============================================================
-
 
 
 def canonicalize_artist(name: str) -> str:
@@ -269,6 +266,7 @@ def canonicalize_artist(name: str) -> str:
 # ============================================================
 # Logging
 # ============================================================
+
 
 def _rotate_logs(log_dir: Path, keep: int):
     logs = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime)

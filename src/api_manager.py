@@ -23,6 +23,7 @@ import config
 from logger import init_logging, get_logger
 
 from env import get_env
+
 env = get_env()
 
 # ----------------------------
@@ -64,11 +65,13 @@ def oauth_exhausted() -> bool:
 
 class QuotaExhaustedError(Exception):
     """Raised when API key or OAuth quota is exhausted."""
+
     pass
 
 
 class APIError(Exception):
     """Non-quota API failure."""
+
     pass
 
 
@@ -155,7 +158,9 @@ def _classify_http_error(e: HttpError) -> str:
 
     # Then try raw HTTP content (googleapiclient puts JSON here often)
     try:
-        raw = e.content.decode("utf-8", errors="ignore") if hasattr(e, "content") else ""
+        raw = (
+            e.content.decode("utf-8", errors="ignore") if hasattr(e, "content") else ""
+        )
         if "quota" in raw.lower() or "dailylimit" in raw.lower():
             return "oauth_quota"
     except Exception:
@@ -168,19 +173,20 @@ def _classify_http_error(e: HttpError) -> str:
     return "other"
 
 
-
 # ============================================================
 # Retry engine
 # ============================================================
+
 
 def oauth_tripwire():
     if oauth_exhausted():
         raise QuotaExhaustedError("OAuth quota exhausted")
 
+
 def execute_with_retry(
     operation: Callable[[], T],
     name: str = "",
-    **kwargs,   # ← swallow old callers
+    **kwargs,  # ← swallow old callers
 ) -> T:
     # Accept legacy keyword
     if not name:
@@ -193,7 +199,7 @@ def execute_with_retry(
             return operation()
 
         except QuotaExhaustedError:
-            # Hard stop — bubble up
+            # Hard stop - bubble up
             raise
 
         except HttpError as e:
@@ -215,7 +221,7 @@ def execute_with_retry(
         if attempt == config.MAX_RETRIES - 1:
             break
 
-        sleep_time = config.BACKOFF_BASE_SEC * (2 ** attempt)
+        sleep_time = config.BACKOFF_BASE_SEC * (2**attempt)
         logger.warning(
             f"{name} failed (attempt {attempt + 1}/{config.MAX_RETRIES}), "
             f"retrying in {sleep_time}s: {last_exception}"
@@ -259,7 +265,7 @@ def http_get_json(
             if not api_key_manager:
                 raise QuotaExhaustedError("API quota exhausted")
 
-            logger.warning("API key quota exhausted — rotating")
+            logger.warning("API key quota exhausted - rotating")
             api_key_manager.rotate()
             return make_request()
 

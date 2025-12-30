@@ -9,12 +9,8 @@ def test_quota_exceeded_detection():
 
     class FakeHttpError(Exception):
         resp = FakeResp()
-        content = json.dumps({
-            "error": {
-                "errors": [
-                    {"reason": "quotaExceeded"}
-                ]
-            }
-        }).encode("utf-8")
+        content = json.dumps(
+            {"error": {"errors": [{"reason": "quotaExceeded"}]}}
+        ).encode("utf-8")
 
     assert _is_quota_exceeded_error(FakeHttpError())

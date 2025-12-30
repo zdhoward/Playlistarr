@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from env import get_env
+from env import get_logging_env
 from . import state
 from .context import resolve_run_id, resolve_command, resolve_profile
 from .log_paths import resolve_log_target
@@ -15,6 +15,7 @@ from .console import build_console_handler
 # Public API
 # ---------------------------------------------------------------------
 
+
 def get_logger(name: str) -> logging.Logger:
     return logging.getLogger(name)
 
@@ -25,7 +26,8 @@ def init_logging() -> None:
 
     Safe to call multiple times.
     """
-    env = get_env()
+    # IMPORTANT: logging must be bootstrappable without API keys / pipeline vars
+    env = get_logging_env()
 
     run_id = resolve_run_id()
     command = resolve_command()
@@ -46,9 +48,7 @@ def init_logging() -> None:
         repoint_file_handler(logfile)
 
         # Defensive invariant: exactly one FileHandler must exist
-        file_handlers = [
-            h for h in root.handlers if isinstance(h, logging.FileHandler)
-        ]
+        file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
         if len(file_handlers) != 1:
             raise RuntimeError(
                 "Logger invariant violated: expected exactly one FileHandler"

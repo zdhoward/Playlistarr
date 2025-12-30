@@ -111,7 +111,7 @@ def apply_invalidation(
 
         except HttpError as e:
             if is_quota_exhausted(e):
-                logger.warning("[apply] Quota exhausted — stopping cleanly")
+                logger.warning("[apply] Quota exhausted - stopping cleanly")
                 save_json(plan_path, plan)
                 save_json(cache_path, playlist_cache)
                 break
@@ -143,7 +143,7 @@ def apply_invalidation(
 
         logger.debug(f"[apply] Removed {video_id}")
 
-    logger.debug(f"[apply] Completed — deleted={deleted}, errors={errors}")
+    logger.debug(f"[apply] Completed - deleted={deleted}, errors={errors}")
 
 
 # ============================================================
@@ -198,7 +198,7 @@ def main() -> None:
 
     csv_stem = actions[0].get("list_stem")
     if not csv_stem:
-        logger.warning("[apply] No list_stem in actions — skipping artist retirement")
+        logger.warning("[apply] No list_stem in actions - skipping artist retirement")
         return
 
     by_artist = {}
@@ -222,5 +222,5 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except QuotaExhaustedError:
-        logger.warning("YouTube API quota exhausted — stopping")
+        logger.warning("YouTube API quota exhausted - stopping")
         sys.exit(2)

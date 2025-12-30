@@ -1,13 +1,14 @@
-PLAYLISTARR_BANNER="""
-                                         
- _____ _         _ _     _               
-|  _  | |___ _ _| |_|___| |_ ___ ___ ___ 
+PLAYLISTARR_BANNER = """
+
+ _____ _         _ _     _
+|  _  | |___ _ _| |_|___| |_ ___ ___ ___
 |   __| | .'| | | | |_ -|  _| .'|  _|  _|
-|__|  |_|__,|_  |_|_|___|_| |__,|_| |_|  
-            |___|                        
-            
-            
+|__|  |_|__,|_  |_|_|___|_| |__,|_| |_|
+            |___|
+
+
 """
+
 
 def PLAYLISTARR_HEADER(title: str, pad=8, motif="•⊱✦⊰•", min_width=80):
     title = title.strip()
@@ -38,16 +39,18 @@ def PLAYLISTARR_HEADER(title: str, pad=8, motif="•⊱✦⊰•", min_width=80)
 
     return f"\n\n{top}\n{middle}\n{bottom}\n"
 
+
 def make_footer(width):
     return f"╚{'═' * (width - 2)}╝"
 
-PLAYLISTARR_SECTION_END="""
+
+PLAYLISTARR_SECTION_END = """
 
 ・‥…━━━━━━━•⊱✦⊰•━━━━━━━…‥・
 
 """
 
-PLAYLISTARR_DIVIDER="""
+PLAYLISTARR_DIVIDER = """
 
 ⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘
 

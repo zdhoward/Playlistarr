@@ -9,6 +9,7 @@ Each module exposes:
 
 No side effects or imports should occur at package import time.
 """
+
 from __future__ import annotations
 
 __all__ = [

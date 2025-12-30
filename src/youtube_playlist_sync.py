@@ -56,7 +56,13 @@ from client import get_youtube_client
 from googleapiclient.errors import HttpError
 from utils import playlist_cache_path, canonicalize_artist
 from logger import init_logging, get_logger
-from api_manager import QuotaExhaustedError, execute_with_retry, oauth_exhausted, oauth_tripwire, mark_oauth_exhausted
+from api_manager import (
+    QuotaExhaustedError,
+    execute_with_retry,
+    oauth_exhausted,
+    oauth_tripwire,
+    mark_oauth_exhausted,
+)
 
 # ----------------------------
 # Constants / config
@@ -85,6 +91,7 @@ logger = get_logger(__name__)
 
 class PlaylistSyncError(Exception):
     """Base exception for playlist sync operations."""
+
 
 class InvalidPlaylistError(PlaylistSyncError):
     """Raised when playlist is invalid or inaccessible."""
@@ -913,7 +920,7 @@ def main() -> int:
 
     try:
         if oauth_exhausted():
-            logger.warning("OAuth quota exhausted — stopping sync")
+            logger.warning("OAuth quota exhausted - stopping sync")
             return 2
 
         # Health check: playlist access
@@ -925,7 +932,9 @@ def main() -> int:
             f"Loading candidates from {out_root}... (filtering={'enabled' if enable_filtering else 'disabled'})"
         )
         allowed_keys = {canonicalize_artist(a) for a in read_artists(csv_path)}
-        load_stats = load_candidates_from_out_root(out_root, enable_filtering, allowed_keys)
+        load_stats = load_candidates_from_out_root(
+            out_root, enable_filtering, allowed_keys
+        )
         candidates = load_stats.candidates
 
         if not candidates:
@@ -1032,7 +1041,9 @@ def main() -> int:
             if removals:
                 logger.debug("\n[DRY-RUN] Removals:")
                 for video_id, _pi, artist in removals[:50]:
-                    logger.debug(f"  - remove {video_id}  artist={artist} (no longer in CSV)")
+                    logger.debug(
+                        f"  - remove {video_id}  artist={artist} (no longer in CSV)"
+                    )
                 if len(removals) > 50:
                     logger.debug(f"  ... ({len(removals) - 50} more)")
 
@@ -1182,7 +1193,9 @@ def main() -> int:
 
                 except QuotaExhaustedError:
                     mark_oauth_exhausted()
-                    logger.warning("Quota exhausted during additions. Saving progress...")
+                    logger.warning(
+                        "Quota exhausted during additions. Saving progress..."
+                    )
                     save_state()
                     logger.debug(
                         f"\n[STOP] Quota exhausted. Progress: added={added}, replaced={replaced}, failed={failed}"
@@ -1225,7 +1238,9 @@ def main() -> int:
 
                 except QuotaExhaustedError:
                     mark_oauth_exhausted()
-                    logger.warning("Quota exhausted during removals. Saving progress...")
+                    logger.warning(
+                        "Quota exhausted during removals. Saving progress..."
+                    )
                     save_state()
                     logger.debug(
                         f"\n[STOP] Quota exhausted. Progress: added={added}, replaced={replaced}, failed={failed}"
@@ -1277,5 +1292,5 @@ if __name__ == "__main__":
         sys.exit(main())
     except QuotaExhaustedError:
         mark_oauth_exhausted()
-        logger.warning("YouTube API quota exhausted — stopping")
+        logger.warning("YouTube API quota exhausted - stopping")
         sys.exit(2)

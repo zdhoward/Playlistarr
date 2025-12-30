@@ -25,6 +25,7 @@ logger = get_logger(__name__)
 # Helpers
 # ============================================================
 
+
 def read_artists(csv_path: Path) -> list[str]:
     artists = []
     with csv_path.open("r", encoding="utf-8") as f:
@@ -58,6 +59,7 @@ def scan_orphans(out_root: Path, allowed_keys: set[str]):
 # ============================================================
 # Main
 # ============================================================
+
 
 def main() -> int:
     csv_path = Path(env.artists_csv)
@@ -98,7 +100,7 @@ def main() -> int:
         logger.debug(f" - {p.name}")
 
     if not apply:
-        logger.debug("DRY RUN — no files deleted.")
+        logger.debug("DRY RUN - no files deleted.")
         return 0
 
     logger.debug("Deleting orphaned artist caches...")

@@ -82,7 +82,7 @@ def iter_discovery_entries(artist_dir: str) -> Iterable[Dict[str, Any]]:
 
 
 # ============================================================
-# Phase 1 — Build expected video universe
+# Phase 1 - Build expected video universe
 # ============================================================
 
 
@@ -142,7 +142,7 @@ def build_expected_videos(
 
 
 # ============================================================
-# Phase 2 — Load playlist cache
+# Phase 2 - Load playlist cache
 # ============================================================
 
 
@@ -163,7 +163,7 @@ def load_playlist_cache(path: Path) -> Dict[str, Dict[str, Any]]:
 
 
 # ============================================================
-# Phase 3 — Build invalidation plan
+# Phase 3 - Build invalidation plan
 # ============================================================
 
 
@@ -258,10 +258,9 @@ def main() -> None:
     logger.debug(f"[invalidate] Plan written to {plan_path}")
 
 
-
 if __name__ == "__main__":
     try:
         sys.exit(main())
     except QuotaExhaustedError:
-        logger.warning("YouTube API quota exhausted — stopping")
+        logger.warning("YouTube API quota exhausted - stopping")
         sys.exit(2)
