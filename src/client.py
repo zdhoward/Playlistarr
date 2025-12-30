@@ -17,7 +17,6 @@ Does NOT:
 
 from __future__ import annotations
 
-import logging
 import os
 from typing import Any, Optional
 
@@ -27,9 +26,21 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 import config
+from logger import init_logging, get_logger
 
-logger = logging.getLogger(__name__)
+# ----------------------------
+# Logging
+# ----------------------------
+init_logging()
+logger = get_logger(__name__)
 
+from pathlib import Path
+
+OAUTH_DIR = Path("../auth")
+OAUTH_DIR.mkdir(exist_ok=True)
+
+OAUTH_TOKEN_PATH = OAUTH_DIR / "oauth_token.json"
+OAUTH_CLIENT_SECRET_PATH = OAUTH_DIR / "client_secret.json"
 
 class YouTubeClientError(Exception):
     """Base exception for YouTube client errors."""
@@ -79,7 +90,7 @@ def get_youtube_client() -> Any:
                 config.OAUTH_TOKEN_FILE,
                 config.YOUTUBE_OAUTH_SCOPES,
             )
-            logger.info("Loaded existing OAuth credentials")
+            logger.debug("Loaded existing OAuth credentials")
         except Exception as e:
             logger.warning(f"Failed to load existing credentials: {e}")
             creds = None
@@ -88,9 +99,9 @@ def get_youtube_client() -> Any:
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             try:
-                logger.info("Refreshing expired OAuth token...")
+                logger.debug("Refreshing expired OAuth token...")
                 creds.refresh(Request())
-                logger.info("Successfully refreshed OAuth token")
+                logger.debug("Successfully refreshed OAuth token")
             except Exception as e:
                 logger.error(f"Failed to refresh token: {e}")
                 raise AuthenticationError(f"Token refresh failed: {e}") from e
@@ -104,13 +115,13 @@ def get_youtube_client() -> Any:
                 )
 
             try:
-                logger.info("Starting OAuth authentication flow...")
+                logger.debug("Starting OAuth authentication flow...")
                 flow = InstalledAppFlow.from_client_secrets_file(
                     config.CLIENT_SECRETS_FILE,
                     config.YOUTUBE_OAUTH_SCOPES,
                 )
                 creds = flow.run_local_server(port=0)
-                logger.info("Successfully authenticated with OAuth")
+                logger.debug("Successfully authenticated with OAuth")
             except Exception as e:
                 logger.error(f"OAuth authentication failed: {e}")
                 raise AuthenticationError(f"OAuth flow failed: {e}") from e
@@ -119,7 +130,7 @@ def get_youtube_client() -> Any:
         try:
             with open(config.OAUTH_TOKEN_FILE, "w", encoding="utf-8") as token:
                 token.write(creds.to_json())
-            logger.info(f"Saved OAuth token to {config.OAUTH_TOKEN_FILE}")
+            logger.debug(f"Saved OAuth token to {config.OAUTH_TOKEN_FILE}")
         except Exception as e:
             logger.warning(f"Failed to save OAuth token: {e}")
 
@@ -133,7 +144,7 @@ def get_youtube_client() -> Any:
     # Build and return YouTube client
     try:
         youtube_client = build("youtube", "v3", credentials=creds)
-        logger.info("Successfully built YouTube API client")
+        logger.debug("Successfully built YouTube API client")
         return youtube_client
     except Exception as e:
         logger.error(f"Failed to build YouTube client: {e}")

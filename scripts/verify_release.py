@@ -35,7 +35,7 @@ def check_mark(passed: bool) -> str:
 def check_file_exists(path: str, description: str) -> bool:
     """Check if a file exists."""
     exists = Path(path).exists()
-    print(f"{check_mark(exists)}: {description}")
+    logger.debug(f"{check_mark(exists)}: {description}")
     return exists
 
 
@@ -45,7 +45,7 @@ def check_file_not_exists(path: str, description: str) -> bool:
     not_exists = not exists
     symbol = check_mark(not_exists)
     status = "not present (good)" if not_exists else "exists (SHOULD BE IN .gitignore)"
-    print(f"{symbol}: {description} - {status}")
+    logger.debug(f"{symbol}: {description} - {status}")
     return not_exists
 
 
@@ -81,11 +81,11 @@ def check_no_secrets(
                 pass
 
     passed = len(found_in) == 0
-    print(f"{check_mark(passed)}: No {description}")
+    logger.debug(f"{check_mark(passed)}: No {description}")
 
     if not passed:
         for filepath in found_in:
-            print(f"  {RED}Found in: {filepath}{RESET}")
+            logger.debug(f"  {RED}Found in: {filepath}{RESET}")
 
     return passed
 
@@ -98,9 +98,9 @@ def check_imports() -> bool:
     for module in modules:
         try:
             __import__(module)
-            print(f"{GREEN}Pass{RESET}: {module}.py imports OK")
+            logger.debug(f"{GREEN}Pass{RESET}: {module}.py imports OK")
         except Exception as e:
-            print(f"{RED}FAIL{RESET}: {module}.py import failed: {e}")
+            logger.debug(f"{RED}FAIL{RESET}: {module}.py import failed: {e}")
             all_passed = False
 
     return all_passed
@@ -108,16 +108,16 @@ def check_imports() -> bool:
 
 def main():
     """Main verification function."""
-    print(f"{BOLD}{BLUE}{'=' * 60}{RESET}")
-    print(f"{BOLD}{BLUE}Playlistarr - Release Verification{RESET}")
-    print(f"{BOLD}{BLUE}{'=' * 60}{RESET}")
-    print(f"Working directory: {project_root}\n")
+    logger.debug(f"{BOLD}{BLUE}{'=' * 60}{RESET}")
+    logger.debug(f"{BOLD}{BLUE}Playlistarr - Release Verification{RESET}")
+    logger.debug(f"{BOLD}{BLUE}{'=' * 60}{RESET}")
+    logger.debug(f"Working directory: {project_root}\n")
 
     errors = 0
     warnings = 0
 
     # 1. Required Files
-    print(f"{BOLD}{YELLOW}1. Checking Required Files...{RESET}")
+    logger.debug(f"{BOLD}{YELLOW}1. Checking Required Files...{RESET}")
     required_files = [
         ("README.md", "README"),
         ("LICENSE", "License"),
@@ -133,10 +133,10 @@ def main():
         if not check_file_exists(path, desc):
             errors += 1
 
-    print()
+    logger.debug()
 
     # 2. Core Scripts
-    print(f"{BOLD}{YELLOW}2. Checking Core Scripts...{RESET}")
+    logger.debug(f"{BOLD}{YELLOW}2. Checking Core Scripts...{RESET}")
     core_scripts = [
         ("config.py", "Config"),
         ("filters.py", "Filters"),
@@ -153,10 +153,10 @@ def main():
         if not check_file_exists(path, desc):
             errors += 1
 
-    print()
+    logger.debug()
 
     # 3. Security - Sensitive Files
-    print(f"{BOLD}{YELLOW}3. Security Check - Sensitive Files...{RESET}")
+    logger.debug(f"{BOLD}{YELLOW}3. Security Check - Sensitive Files...{RESET}")
     sensitive_files = [
         ("auth/client_secrets.json", "OAuth secrets"),
         ("auth/oauth_token.json", "OAuth token"),
@@ -168,10 +168,10 @@ def main():
         if not check_file_not_exists(path, desc):
             warnings += 1
 
-    print()
+    logger.debug()
 
     # 4. Security - API Keys in Code
-    print(f"{BOLD}{YELLOW}4. Security Check - API Keys in Code...{RESET}")
+    logger.debug(f"{BOLD}{YELLOW}4. Security Check - API Keys in Code...{RESET}")
 
     # Note: We exclude files that are samples/documentation/scripts
     exclude_list = [
@@ -190,17 +190,17 @@ def main():
     # Don't check for "client_secret" in client.py since it's the module name
     exclude_list_client = exclude_list + ["client.py"]
 
-    print()
+    logger.debug()
 
     # 5. Import Tests
-    print(f"{BOLD}{YELLOW}5. Testing Python Imports...{RESET}")
+    logger.debug(f"{BOLD}{YELLOW}5. Testing Python Imports...{RESET}")
     if not check_imports():
         errors += 1
 
-    print()
+    logger.debug()
 
     # 6. .gitignore Check
-    print(f"{BOLD}{YELLOW}6. Checking .gitignore...{RESET}")
+    logger.debug(f"{BOLD}{YELLOW}6. Checking .gitignore...{RESET}")
     if Path(".gitignore").exists():
         with open(".gitignore", "r") as f:
             gitignore = f.read()
@@ -208,18 +208,18 @@ def main():
         required_patterns = ["auth/", "cache/", "out/", ".env", "*.pyc", "__pycache__"]
         for pattern in required_patterns:
             if pattern in gitignore:
-                print(f"{GREEN}Pass{RESET}: .gitignore contains '{pattern}'")
+                logger.debug(f"{GREEN}Pass{RESET}: .gitignore contains '{pattern}'")
             else:
-                print(f"{RED}FAIL{RESET}: .gitignore missing '{pattern}'")
+                logger.debug(f"{RED}FAIL{RESET}: .gitignore missing '{pattern}'")
                 errors += 1
     else:
-        print(f"{RED}FAIL{RESET}: .gitignore file missing!")
+        logger.debug(f"{RED}FAIL{RESET}: .gitignore file missing!")
         errors += 1
 
-    print()
+    logger.debug()
 
     # 7. GitHub Configuration
-    print(f"{BOLD}{YELLOW}7. Checking GitHub Configuration...{RESET}")
+    logger.debug(f"{BOLD}{YELLOW}7. Checking GitHub Configuration...{RESET}")
     github_files = [
         (".github/workflows/ci.yml", "GitHub Actions CI"),
         (".github/ISSUE_TEMPLATE/bug_report.md", "Bug report template"),
@@ -230,32 +230,32 @@ def main():
         if not check_file_exists(path, desc):
             errors += 1
 
-    print()
+    logger.debug()
 
     # Summary
-    print(f"{BOLD}{BLUE}{'=' * 60}{RESET}\n")
+    logger.debug(f"{BOLD}{BLUE}{'=' * 60}{RESET}\n")
 
     if errors == 0 and warnings == 0:
-        print(f"{BOLD}{GREEN}SUCCESS! Project is ready for public release!{RESET}\n")
-        print(f"{BLUE}Next steps:{RESET}")
-        print("  1. Review all files one more time")
-        print("  2. Create GitHub repository")
-        print("  3. git init")
-        print("  4. git add .")
-        print("  5. git commit -m 'Initial commit - v1.0.0'")
-        print("  6. git push\n")
+        logger.debug(f"{BOLD}{GREEN}SUCCESS! Project is ready for public release!{RESET}\n")
+        logger.debug(f"{BLUE}Next steps:{RESET}")
+        logger.debug("  1. Review all files one more time")
+        logger.debug("  2. Create GitHub repository")
+        logger.debug("  3. git init")
+        logger.debug("  4. git add .")
+        logger.debug("  5. git commit -m 'Initial commit - v1.0.0'")
+        logger.debug("  6. git push\n")
         return 0
     elif errors == 0:
-        print(
+        logger.debug(
             f"{BOLD}{YELLOW}Project has {warnings} warnings but is OK to release{RESET}\n"
         )
-        print("Review warnings above and fix if needed.\n")
+        logger.debug("Review warnings above and fix if needed.\n")
         return 0
     else:
-        print(
+        logger.debug(
             f"{BOLD}{RED}Project has {errors} errors and {warnings} warnings!{RESET}\n"
         )
-        print("Fix all errors before releasing!\n")
+        logger.debug("Fix all errors before releasing!\n")
         return 1
 
 

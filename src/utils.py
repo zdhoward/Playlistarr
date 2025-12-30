@@ -14,10 +14,10 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+import unicodedata
 
 import config
-
 
 # ============================================================
 # Path Validation
@@ -111,30 +111,30 @@ def discovery_output_path(csv_stem: str, artist: str) -> Path:
     """
     Get the discovery output directory for an artist.
 
+    This uses a canonicalized artist key for filesystem paths so that
+    punctuation, unicode, and formatting differences do not create
+    multiple folders for the same artist.
+
     Args:
-        csv_stem: CSV filename stem (e.g., "artists" from "artists.csv")
-        artist: Artist name
+        csv_stem: CSV filename stem (e.g., "muchloud_artists" from "muchloud_artists.csv")
+        artist: Display artist name from CSV
 
     Returns:
         Path to artist's discovery output directory
-
-    Raises:
-        ValueError: If artist name is invalid
     """
     validate_artist_name(artist)
 
-    # Sanitize artist name for filesystem use
-    # Replace slashes with dashes (e.g., "AC/DC" -> "AC-DC")
-    safe_artist = artist.replace("/", "-").replace("\\", "-")
+    # Generate stable filesystem key
+    artist_key = canonicalize_artist(artist)
 
-    # Remove other problematic characters for Windows
-    # Windows reserved: < > : " | ? *
-    for char in '<>:"|?*':
-        safe_artist = safe_artist.replace(char, "-")
+    if not artist_key:
+        raise ValueError(f"Artist name produced empty key: {artist}")
 
-    out_root = Path(config.DISCOVERY_ROOT) / csv_stem / safe_artist
+    out_root = Path(config.DISCOVERY_ROOT) / csv_stem / artist_key
     out_root.mkdir(parents=True, exist_ok=True)
+
     return out_root
+
 
 
 # ============================================================
@@ -232,3 +232,48 @@ def safe_mkdir(path: Path) -> None:
         path: Directory path
     """
     ensure_directory(path)
+
+
+
+# ============================================================
+# Normalization
+# ============================================================
+
+
+
+def canonicalize_artist(name: str) -> str:
+    """
+    Convert artist name into a stable filesystem-safe key.
+
+    This MUST be used everywhere for directory names and comparisons.
+
+    Examples:
+        "Andrew W.K."      -> "andrewwk"
+        "AC/DC"           -> "acdc"
+        "Motörhead"       -> "motorhead"
+        "Guns N’ Roses"   -> "gunsnroses"
+    """
+    name = unicodedata.normalize("NFKD", name)
+    name = name.encode("ascii", "ignore").decode("ascii")  # remove accents
+    name = name.lower()
+
+    # Normalize punctuation
+    name = name.replace("’", "'").replace("“", '"').replace("”", '"')
+
+    # Remove everything except letters and numbers
+    name = re.sub(r"[^a-z0-9]", "", name)
+
+    return name
+
+
+# ============================================================
+# Logging
+# ============================================================
+
+def _rotate_logs(log_dir: Path, keep: int):
+    logs = sorted(log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime)
+    while len(logs) > keep:
+        try:
+            logs.pop(0).unlink()
+        except Exception:
+            pass

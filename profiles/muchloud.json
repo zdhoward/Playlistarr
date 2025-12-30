@@ -1,0 +1,45 @@
+{
+  "label": "MuchLoud",
+  "playlist_id": "PLa73YkAc2TvLqEb9gqMHnmjoN30qpnPe3",
+
+  "rules": {
+    "always_allowed_phrases": [
+      "official music video",
+      "official video"
+    ],
+
+    "version_exclusion_patterns": [
+      "\\blive\\b",
+      "\\bremix\\b",
+      "\\bacoustic\\b",
+      "\\blyrics?\\b",
+      "\\bkaraoke\\b",
+      "\\binstrumental\\b"
+    ],
+
+    "blocked_channel_keywords": [
+      "records",
+      "label",
+      "archive",
+      "lyrics",
+      "fan",
+      "tribute"
+    ],
+
+    "min_duration_sec": 90,
+    "max_duration_sec": 600,
+
+    "artist_max_video_year": {
+      "Linkin Park": 2009,
+      "Korn": 2005
+    },
+
+    "artist_ignore_title_keywords": {
+      "Korn": [
+        "from deuce",
+        "demo",
+        "remastered"
+      ]
+    }
+  }
+}

@@ -13,9 +13,9 @@ This script:
 
 from __future__ import annotations
 
-import argparse
+from env import get_env
+
 import json
-import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List
@@ -23,15 +23,18 @@ import shutil
 
 from googleapiclient.errors import HttpError
 
+import sys
+from api_manager import QuotaExhaustedError, oauth_tripwire
+
 from client import get_youtube_client
 from utils import playlist_cache_path, invalidation_plan_path
+from logger import init_logging, get_logger
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
-
+# ----------------------------
+# Logging
+# ----------------------------
+init_logging()
+logger = get_logger(__name__)
 
 # ============================================================
 # JSON helpers
@@ -91,6 +94,8 @@ def apply_invalidation(
         if action.get("status") != "pending":
             continue
 
+        oauth_tripwire()
+
         playlist_item_id = action.get("playlist_item_id")
         video_id = action.get("video_id")
 
@@ -106,7 +111,7 @@ def apply_invalidation(
 
         except HttpError as e:
             if is_quota_exhausted(e):
-                logger.error("[apply] Quota exhausted — stopping cleanly")
+                logger.warning("[apply] Quota exhausted — stopping cleanly")
                 save_json(plan_path, plan)
                 save_json(cache_path, playlist_cache)
                 break
@@ -136,9 +141,9 @@ def apply_invalidation(
         save_json(plan_path, plan)
         save_json(cache_path, playlist_cache)
 
-        logger.info(f"[apply] Removed {video_id}")
+        logger.debug(f"[apply] Removed {video_id}")
 
-    logger.info(f"[apply] Completed — deleted={deleted}, errors={errors}")
+    logger.debug(f"[apply] Completed — deleted={deleted}, errors={errors}")
 
 
 # ============================================================
@@ -147,34 +152,31 @@ def apply_invalidation(
 
 
 def main() -> None:
-    """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Apply invalidation plan to remove videos from playlist"
-    )
-    parser.add_argument("playlist_id", help="Target YouTube playlist ID")
-    args = parser.parse_args()
+    env = get_env()
 
-    plan_path = invalidation_plan_path(args.playlist_id)
-    cache_path = playlist_cache_path(args.playlist_id)
+    playlist_id = env.playlist_id
+
+    plan_path = invalidation_plan_path(playlist_id)
+    cache_path = playlist_cache_path(playlist_id)
 
     if not plan_path.exists():
         logger.error(f"[apply] Missing invalidation plan: {plan_path}")
-        logger.info("[apply] Run playlist_invalidate.py first")
+        logger.debug("[apply] Run playlist_invalidate first")
         return
 
     if not cache_path.exists():
         logger.error(f"[apply] Missing playlist cache: {cache_path}")
-        logger.info("[apply] Run youtube_playlist_sync.py first")
+        logger.debug("[apply] Run playlist_sync first")
         return
 
     plan = load_json(plan_path)
     playlist_cache = load_json(cache_path)
 
     pending = sum(1 for a in plan.get("actions", []) if a.get("status") == "pending")
-    logger.info(f"[apply] Pending removals: {pending}")
+    logger.debug(f"[apply] Pending removals: {pending}")
 
     if pending == 0:
-        logger.info("[apply] Nothing to do")
+        logger.debug("[apply] Nothing to do")
         return
 
     youtube = get_youtube_client()
@@ -199,25 +201,26 @@ def main() -> None:
         logger.warning("[apply] No list_stem in actions — skipping artist retirement")
         return
 
-    # Group actions by artist
     by_artist = {}
-    for a in plan.get("actions", []):
+    for a in actions:
         artist = a.get("artist")
         if not artist:
             continue
         by_artist.setdefault(artist, []).append(a)
 
-    for artist, actions in by_artist.items():
-        # Only delete artist cache if ALL actions are done
-        if not all(a.get("status") == "done" for a in actions):
+    for artist, items in by_artist.items():
+        if not all(a.get("status") == "done" for a in items):
             continue
 
-        artist_dir = Path("out") / csv_stem / artist
-
+        artist_dir = Path("../out") / csv_stem / artist
         if artist_dir.exists():
-            logger.info(f"[apply] Retiring artist cache: {artist}")
+            logger.debug(f"[apply] Retiring artist cache: {artist}")
             shutil.rmtree(artist_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except QuotaExhaustedError:
+        logger.warning("YouTube API quota exhausted — stopping")
+        sys.exit(2)

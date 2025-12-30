@@ -19,17 +19,10 @@ Does NOT:
 
 from __future__ import annotations
 
-from dotenv import load_dotenv
+from env import get_env
 
-load_dotenv()
-
-import argparse
-import json
-import logging
 import re
 import sys
-import time
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -41,10 +34,14 @@ import requests
 import config
 import filters
 from api_manager import APIKeyManager, QuotaExhaustedError, http_get_json
-from utils import discovery_output_path, read_json, read_json_safe, write_json
+from utils import discovery_output_path, read_json_safe, write_json
+from logger import init_logging, get_logger
 
-logger = logging.getLogger(__name__)
-
+# ----------------------------
+# Logging
+# ----------------------------
+init_logging()
+logger = get_logger(__name__)
 
 # ============================================================
 # Data Classes
@@ -84,6 +81,7 @@ class ChannelInfo:
     channel_url: str
     is_vevo: bool
     is_topic: bool
+    is_official_artist: bool
 
 
 @dataclass
@@ -141,7 +139,7 @@ def read_artists_csv(csv_path: Path) -> List[str]:
 
             artists.append(artist)
 
-    logger.info(f"Loaded {len(artists)} artists from {csv_path}")
+    logger.debug(f"Loaded {len(artists)} artists from {csv_path}")
     return artists
 
 
@@ -296,6 +294,49 @@ class YouTubeAPI:
             logger.warning(f"Failed to search channels for '{query}': {e}")
             return []
 
+    def search_channel_videos(
+            self,
+            query: str,
+            channel_id: Optional[str] = None,
+            max_results: int = 25,
+    ) -> List[Dict[str, Any]]:
+        try:
+            params = {
+                "part": "snippet",
+                "q": query,
+                "type": "video",
+                "maxResults": max_results,
+            }
+
+            if channel_id:
+                params["channelId"] = channel_id
+
+            data = self._get(config.SEARCH_URL, params)
+
+            videos = []
+            for item in data.get("items", []):
+                vid = item.get("id", {}).get("videoId")
+                if not vid:
+                    continue
+
+                snippet = item.get("snippet", {})
+                videos.append(
+                    {
+                        "video_id": vid,
+                        "title": snippet.get("title", ""),
+                        "description": snippet.get("description", ""),
+                        "published_at": snippet.get("publishedAt", ""),
+                        "channel_title": snippet.get("channelTitle", ""),
+                    }
+                )
+
+            return videos
+        except QuotaExhaustedError:
+            raise
+        except Exception as e:
+            logger.warning(f"Search failed for '{query}': {e}")
+            return []
+
     def get_uploads_playlist_id(self, channel_id: str) -> Optional[str]:
         """
         Get the uploads playlist ID for a channel.
@@ -374,7 +415,7 @@ class YouTubeAPI:
                     return videos
                 raise
 
-        logger.info(f"Found {len(videos)} videos in channel {channel_id}")
+        logger.debug(f"Found {len(videos)} videos in channel {channel_id}")
         return videos
 
     def get_video_details(self, video_ids: List[str]) -> Dict[str, Dict[str, Any]]:
@@ -539,12 +580,13 @@ def classify_video(
 
 
 def get_channel_metadata(api: YouTubeAPI, channel_id: str) -> Optional[ChannelInfo]:
-    """Get channel metadata."""
     channel = api.get_channel_by_id(channel_id)
     if not channel:
         return None
 
     snippet = channel.get("snippet", {})
+    branding = channel.get("brandingSettings", {}).get("channel", {})
+
     title = snippet.get("title", "")
 
     return ChannelInfo(
@@ -553,18 +595,25 @@ def get_channel_metadata(api: YouTubeAPI, channel_id: str) -> Optional[ChannelIn
         channel_url=f"https://www.youtube.com/channel/{channel_id}",
         is_vevo="vevo" in title.lower(),
         is_topic=title.lower().endswith(" - topic"),
+        is_official_artist=branding.get("isOfficialArtistChannel", False),
     )
 
 
 def is_viable_channel(api: YouTubeAPI, channel_id: str) -> bool:
     """Check if channel has enough uploads to be viable."""
+
     metadata = get_channel_metadata(api, channel_id)
+
+    # HARD BLOCK topic channels here
     if not metadata or metadata.is_topic:
         return False
 
-    videos = api.list_uploads(channel_id)
-    return len(videos) >= config.MIN_UPLOADS_FOR_VIABLE_CHANNEL
-
+    try:
+        videos = api.list_uploads(channel_id)
+        return len(videos) >= config.MIN_UPLOADS_FOR_VIABLE_CHANNEL
+    except Exception as e:
+        logger.warning(f"Uploads check failed for {metadata.channel_title}: {e}")
+        return False
 
 def resolve_artist_channel(
     api: YouTubeAPI, artist: str
@@ -591,15 +640,29 @@ def resolve_artist_channel(
     # Try official channel search
     for query_template in config.OFFICIAL_SEARCH_QUERIES:
         query = query_template.format(artist=artist)
-        channel_ids = api.search_channels(query, max_results=3)
+        channel_ids = api.search_channels(query, max_results=5)
 
+        candidates = []
         for channel_id in channel_ids:
             metadata = get_channel_metadata(api, channel_id)
             if not metadata or metadata.is_topic:
                 continue
-
             if is_viable_channel(api, channel_id):
-                return metadata, "official_search"
+                candidates.append(metadata)
+
+        # Prefer Official Artist Channels first
+        for c in candidates:
+            if c.is_official_artist:
+                return c, "official_artist"
+
+        # Then VEVO
+        for c in candidates:
+            if c.is_vevo:
+                return c, "vevo"
+
+        # Fallback to best viable
+        if candidates:
+            return candidates[0], "official_search"
 
     return None, "none"
 
@@ -661,11 +724,11 @@ def discover_artist(
 
     # Skip if completed
     if state.completed and not force_update:
-        logger.info(f"Skipping {artist} (already completed)")
+        logger.debug(f"Skipping {artist} (already completed)")
         return stats
 
     # Resolve channel
-    logger.info(f"Resolving channel for {artist}...")
+    logger.debug(f"Resolving channel for {artist}...")
     channel_info, matched_via = resolve_artist_channel(api, artist)
 
     if not channel_info:
@@ -689,16 +752,33 @@ def discover_artist(
         )
         return stats
 
-    logger.info(f"Found channel: {channel_info.channel_title} ({matched_via})")
+    logger.debug(f"Found channel: {channel_info.channel_title} ({matched_via})")
     stats.channel = channel_info
     stats.matched_via = matched_via
 
     # Get uploads
     uploads = api.list_uploads(channel_info.channel_id)
+
+    fallback_used = False
+    fallback_query = None
+
     if not uploads:
-        state.completed = True
-        save_state(state_path, state)
-        return stats
+        logger.warning(f"Uploads blocked for {artist}, using search fallback")
+
+        search_results = []
+
+        for q in config.VEVO_SEARCH_QUERIES:
+            search_results += api.search_channel_videos(
+                q.format(artist=artist), channel_info.channel_id
+            )
+
+        for q in config.OFFICIAL_SEARCH_QUERIES:
+            search_results += api.search_channel_videos(
+                q.format(artist=artist), channel_info.channel_id
+            )
+
+        uploads = search_results
+        fallback_used = True
 
     # Get video details
     video_ids = [v["video_id"] for v in uploads]
@@ -734,6 +814,8 @@ def discover_artist(
 
         # Create entry
         entry = VideoEntry(
+            source="fallback" if fallback_used else "original",
+            fallback_query=fallback_query if fallback_used else None,
             video_id=video_id,
             title=video_data.get("title", ""),
             description=video_data.get("description", ""),
@@ -787,7 +869,7 @@ def discover_artist(
     state.last_completed = now_utc()
     save_state(state_path, state)
 
-    logger.info(
+    logger.debug(
         f"{artist}: accepted={stats.accepted}, "
         f"review={stats.review}, failed={stats.failed}"
     )
@@ -795,29 +877,13 @@ def discover_artist(
     return stats
 
 
-def main(argv: List[str]) -> int:
-    """Main entry point."""
-    parser = argparse.ArgumentParser(description="Discover official music videos")
-    parser.add_argument("csv", help="CSV file with artist names")
-    parser.add_argument(
-        "-f",
-        "--force-update",
-        action="store_true",
-        help="Force re-processing of all artists",
-    )
-    parser.add_argument(
-        "--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"]
-    )
-    args = parser.parse_args(argv)
+def main() -> int:
+    env = get_env()
 
-    # Setup logging
-    logging.basicConfig(
-        level=getattr(logging, args.log_level),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
+    # Read inputs from environment
+    csv_path = Path(env.artists_csv)
+    force_update = env.force_update
 
-    # Load artists
-    csv_path = Path(args.csv)
     if not csv_path.exists():
         logger.error(f"CSV file not found: {csv_path}")
         return 1
@@ -828,34 +894,38 @@ def main(argv: List[str]) -> int:
         return 1
 
     # Setup API
-    api_key_manager = APIKeyManager(config.API_KEYS)
+    api_key_manager = APIKeyManager(env.youtube_api_keys)
     api = YouTubeAPI(api_key_manager)
 
-    # Discovery loop
     csv_stem = csv_path.stem
 
     try:
         for artist in artists:
-            logger.info(f"Processing: {artist}")
+            logger.debug(f"Processing: {artist}")
 
             output_dir = discovery_output_path(csv_stem, artist)
 
             try:
-                discover_artist(api, artist, output_dir, args.force_update)
+                discover_artist(api, artist, output_dir, force_update)
             except QuotaExhaustedError:
-                logger.error("Quota exhausted. Stopping discovery.")
+                logger.warning("YouTube API quota exhausted — stopping discovery")
                 return 2
+
             except Exception as e:
-                logger.error(f"Error processing {artist}: {e}", exc_info=True)
+                logger.exception(f"Error processing {artist}")
                 continue
 
-        logger.info("Discovery complete!")
+        logger.debug("Discovery complete!")
         return 0
 
     except KeyboardInterrupt:
-        logger.info("Discovery interrupted by user")
+        logger.debug("Discovery interrupted by user")
         return 130
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main())
+    except QuotaExhaustedError:
+        logger.warning("YouTube API quota exhausted — stopping")
+        sys.exit(2)

@@ -30,14 +30,11 @@ each video is treated as unique and replacements won't occur.
 
 from __future__ import annotations
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from env import get_env
 
 import argparse
 import csv
 import json
-import logging
 import sys
 import time
 from dataclasses import dataclass
@@ -45,7 +42,6 @@ from enum import Enum
 from pathlib import Path
 from typing import (
     Any,
-    Callable,
     Dict,
     Iterable,
     List,
@@ -55,12 +51,12 @@ from typing import (
     TypeVar,
 )
 
-import config
 import filters
 from client import get_youtube_client
 from googleapiclient.errors import HttpError
-from utils import playlist_cache_path
-
+from utils import playlist_cache_path, canonicalize_artist
+from logger import init_logging, get_logger
+from api_manager import QuotaExhaustedError, execute_with_retry, oauth_exhausted, oauth_tripwire, mark_oauth_exhausted
 
 # ----------------------------
 # Constants / config
@@ -79,14 +75,8 @@ T = TypeVar("T")
 # ----------------------------
 # Logging
 # ----------------------------
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-logger = logging.getLogger(__name__)
-
+init_logging()
+logger = get_logger(__name__)
 
 # ----------------------------
 # Exceptions
@@ -95,11 +85,6 @@ logger = logging.getLogger(__name__)
 
 class PlaylistSyncError(Exception):
     """Base exception for playlist sync operations."""
-
-
-class QuotaExhaustedError(PlaylistSyncError):
-    """Raised when YouTube API quota/rate-limit is exhausted after retries."""
-
 
 class InvalidPlaylistError(PlaylistSyncError):
     """Raised when playlist is invalid or inaccessible."""
@@ -240,7 +225,7 @@ class SyncProgress:
             return
 
         pct = (self.processed / self.total) * 100.0 if self.total else 100.0
-        logger.info(
+        logger.debug(
             f"Progress: {self.processed}/{self.total} ({pct:.1f}%) | "
             f"added={self.added} replaced={self.replaced} removed={self.removed} "
             f"failed={self.failed} skipped_limit={self.skipped_due_to_limit}"
@@ -284,71 +269,6 @@ def _http_reason(e: HttpError) -> str:
         return str(e)
 
 
-def _is_quota_error(e: HttpError) -> bool:
-    # Typical quota signals: 403 with "quotaExceeded", "dailyLimitExceeded", etc.
-    if getattr(e, "status_code", None) == 403:
-        return True
-    try:
-        status = int(getattr(e.resp, "status", 0))
-        if status == 403:
-            return True
-    except Exception:
-        pass
-    msg = _http_reason(e).lower()
-    return any(k in msg for k in ("quota", "dailylimit", "rate limit", "exceeded"))
-
-
-def execute_with_retry(
-    operation: Callable[[], T],
-    *,
-    max_retries: int = 3,
-    operation_name: str = "operation",
-) -> T:
-    """
-    Execute an operation with exponential backoff on quota/rate-limit errors.
-    Non-quota HttpError fails fast.
-    """
-    last_error: Exception | None = None
-
-    for attempt in range(max_retries):
-        try:
-            result = operation()
-            if attempt > 0:
-                logger.info(
-                    f"{operation_name} succeeded on attempt {attempt + 1}/{max_retries}"
-                )
-            return result
-
-        except HttpError as e:
-            last_error = e
-
-            if _is_quota_error(e):
-                if attempt < max_retries - 1:
-                    wait = 2**attempt
-                    logger.warning(
-                        f"{operation_name} hit rate limit; retrying in {wait}s "
-                        f"(attempt {attempt + 1}/{max_retries})"
-                    )
-                    time.sleep(wait)
-                    continue
-                raise QuotaExhaustedError(
-                    f"Quota exhausted during {operation_name}"
-                ) from e
-
-            # Non-quota HttpError: fail fast
-            raise
-
-        except Exception as e:
-            last_error = e
-            logger.error(f"{operation_name} failed: {e}")
-            raise
-
-    # Defensive fallback
-    raise PlaylistSyncError(
-        f"{operation_name} failed after {max_retries} attempts"
-    ) from last_error
-
-
 # ----------------------------
 # OAuth / YouTube client
 # ----------------------------
@@ -360,6 +280,7 @@ def validate_playlist_access(youtube: YouTubeClient, playlist_id: str) -> None:
         time.sleep(PLAYLIST_MUTATION_SLEEP)
 
         def _op() -> Any:
+            oauth_tripwire()
             return (
                 youtube.playlists()
                 .list(
@@ -373,6 +294,7 @@ def validate_playlist_access(youtube: YouTubeClient, playlist_id: str) -> None:
         execute_with_retry(_op, operation_name="validate playlist access")
     except QuotaExhaustedError:
         # If quota is exhausted even during validation, bubble up as-is.
+        mark_oauth_exhausted()
         raise
     except HttpError as e:
         raise InvalidPlaylistError(
@@ -445,7 +367,9 @@ def _extract_song_key(item: Dict[str, Any], video_id: str) -> str:
 
 
 def load_candidates_from_out_root(
-    out_root: Path, enable_filtering: bool = True
+    out_root: Path,
+    enable_filtering: bool = True,
+    allowed_keys: set[str] | None = None,
 ) -> LoadStats:
     """
     Scans: out/<stem>/**/accepted.json
@@ -457,14 +381,15 @@ def load_candidates_from_out_root(
 
     for p in accepted_paths:
         artist = p.parent.name
+
+        if allowed_keys is not None and artist not in allowed_keys:
+            logger.debug(f"Skipping orphaned artist folder: {artist}")
+            continue
+
         try:
             data = _read_json(p)
         except Exception as e:
             logger.warning(f"Failed to read {p}: {e}")
-            continue
-
-        if not isinstance(data, list):
-            logger.warning(f"{p} is not a JSON list; skipping.")
             continue
 
         for item in data:
@@ -600,6 +525,7 @@ def fetch_playlist_items(
         time.sleep(PLAYLIST_MUTATION_SLEEP)
 
         def _op() -> Any:
+            oauth_tripwire()
             return (
                 youtube.playlistItems()
                 .list(
@@ -645,6 +571,7 @@ def fetch_video_definitions(
         time.sleep(PLAYLIST_MUTATION_SLEEP)
 
         def _op() -> Any:
+            oauth_tripwire()
             return (
                 youtube.videos()
                 .list(
@@ -660,6 +587,7 @@ def fetch_video_definitions(
                 _op, operation_name="fetch videos.list definitions"
             )
         except QuotaExhaustedError:
+            mark_oauth_exhausted()
             raise
         except HttpError as e:
             logger.warning(
@@ -694,10 +622,10 @@ def build_playlist_state(
     cache = load_cache(cache_path)
 
     if not force_update and cache and cache_is_fresh(cache, playlist_id):
-        logger.info("Using cached playlist state")
+        logger.debug("Using cached playlist state")
         return cache
 
-    logger.info("Fetching fresh playlist state from YouTube...")
+    logger.debug("Fetching fresh playlist state from YouTube...")
 
     time.sleep(PLAYLIST_MUTATION_SLEEP)
     items = fetch_playlist_items(youtube, playlist_id)
@@ -733,7 +661,7 @@ def build_playlist_state(
     }
 
     _write_json(cache_path, new_cache)
-    logger.info(f"Cached {len(items)} playlist items")
+    logger.debug(f"Cached {len(items)} playlist items")
     return new_cache
 
 
@@ -747,6 +675,7 @@ def playlist_insert(youtube: YouTubeClient, playlist_id: str, video_id: str) -> 
     time.sleep(PLAYLIST_MUTATION_SLEEP)
 
     def _op() -> Any:
+        oauth_tripwire()
         return (
             youtube.playlistItems()
             .insert(
@@ -770,6 +699,7 @@ def playlist_delete(youtube: YouTubeClient, playlist_item_id: str) -> None:
     time.sleep(PLAYLIST_MUTATION_SLEEP)
 
     def _op() -> Any:
+        oauth_tripwire()
         return youtube.playlistItems().delete(id=playlist_item_id).execute()
 
     execute_with_retry(_op, operation_name=f"delete playlistItemId={playlist_item_id}")
@@ -789,7 +719,7 @@ def _enrich_candidate_definitions(
     if not need_defs:
         return candidates
 
-    logger.info(f"Fetching definitions for {len(need_defs)} videos...")
+    logger.debug(f"Fetching definitions for {len(need_defs)} videos...")
     defs = fetch_video_definitions(youtube, need_defs)
 
     enriched: List[Candidate] = []
@@ -967,14 +897,13 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
-def main(argv: List[str]) -> int:
-    args = parse_args(argv)
-    logger.setLevel(getattr(logging, args.log_level))
+def main() -> int:
+    env = get_env()
 
-    csv_path = Path(args.csv_file)
+    csv_path = Path(env.artists_csv)
     stem = csv_path.stem
-    out_root = Path("out") / stem
-    cache_path = playlist_cache_path(args.playlist_id)
+    out_root = Path("../out") / stem
+    cache_path = playlist_cache_path(env.playlist_id)
 
     if not out_root.exists():
         logger.error(f"Expected input root folder does not exist: {out_root}")
@@ -983,19 +912,24 @@ def main(argv: List[str]) -> int:
     youtube = get_youtube_client()
 
     try:
+        if oauth_exhausted():
+            logger.warning("OAuth quota exhausted — stopping sync")
+            return 2
+
         # Health check: playlist access
-        validate_playlist_access(youtube, args.playlist_id)
+        validate_playlist_access(youtube, env.playlist_id)
 
         # 1) Load candidates
-        enable_filtering = not args.no_filter
-        logger.info(
+        enable_filtering = not env.no_filter
+        logger.debug(
             f"Loading candidates from {out_root}... (filtering={'enabled' if enable_filtering else 'disabled'})"
         )
-        load_stats = load_candidates_from_out_root(out_root, enable_filtering)
+        allowed_keys = {canonicalize_artist(a) for a in read_artists(csv_path)}
+        load_stats = load_candidates_from_out_root(out_root, enable_filtering, allowed_keys)
         candidates = load_stats.candidates
 
         if not candidates:
-            logger.info(f"No candidates found under: {out_root}")
+            logger.debug(f"No candidates found under: {out_root}")
             return 0
 
         # Health check: duplicate video_ids in candidates
@@ -1012,7 +946,7 @@ def main(argv: List[str]) -> int:
             and load_stats.filtered_versions > 0
             and load_stats.total_items > 0
         ):
-            logger.info(
+            logger.debug(
                 f"Version filtering: excluded {load_stats.filtered_versions}/{load_stats.total_items} items "
                 f"({100.0 * load_stats.filtered_versions / load_stats.total_items:.1f}%)"
             )
@@ -1026,9 +960,9 @@ def main(argv: List[str]) -> int:
         # 2) Load playlist state
         playlist_state = build_playlist_state(
             youtube=youtube,
-            playlist_id=args.playlist_id,
+            playlist_id=env.playlist_id,
             cache_path=cache_path,
-            force_update=args.force_update,
+            force_update=env.force_update,
         )
 
         # Cache health check: if somehow invalid, force refresh
@@ -1040,67 +974,67 @@ def main(argv: List[str]) -> int:
             logger.warning("Cache health check failed; forcing refresh from YouTube")
             playlist_state = build_playlist_state(
                 youtube=youtube,
-                playlist_id=args.playlist_id,
+                playlist_id=env.playlist_id,
                 cache_path=cache_path,
                 force_update=True,
             )
 
         # Plan removals
-        allowed_artists = read_artists(csv_path)
-        removals = plan_removals(playlist_state, allowed_artists)
+        allowed_keys = {canonicalize_artist(a) for a in read_artists(csv_path)}
+        removals = plan_removals(playlist_state, allowed_keys)
 
         # 3) Plan changes
-        logger.info("Planning changes...")
+        logger.debug("Planning changes...")
         plan = plan_changes(candidates, playlist_state, youtube)
 
-        print("=" * 80)
-        print(f"Out root:          {out_root}")
-        print(f"Playlist ID:       {args.playlist_id}")
-        print(f"Total items found: {load_stats.total_items}")
-        print(
-            f"Filtered versions: {load_stats.filtered_versions} ({'disabled' if args.no_filter else 'enabled'})"
+        logger.debug("=" * 80)
+        logger.debug(f"Out root:          {out_root}")
+        logger.debug(f"Playlist ID:       {env.playlist_id}")
+        logger.debug(f"Total items found: {load_stats.total_items}")
+        logger.debug(
+            f"Filtered versions: {load_stats.filtered_versions} ({'disabled' if env.no_filter else 'enabled'})"
         )
-        print(
+        logger.debug(
             f"Candidates:        {len(candidates)} (best-per-song_key after filtering)"
         )
-        print(f"Already present:   {plan.already_present}")
-        print(f"Planned adds:      {len(plan.to_add)}")
-        print(
+        logger.debug(f"Already present:   {plan.already_present}")
+        logger.debug(f"Planned adds:      {len(plan.to_add)}")
+        logger.debug(
             f"Planned replaces:  {len(plan.to_replace)} (only when song_key mapping exists + strictly better)"
         )
-        print(f"Skipped (worse):   {plan.skipped_worse}")
-        print(f"Planned removals:  {len(removals)}")
-        print(f"Dry run:           {bool(args.dry_run)}")
-        print(f"Max add limit:     {args.max_add if args.max_add else 'none'}")
-        print("=" * 80)
+        logger.debug(f"Skipped (worse):   {plan.skipped_worse}")
+        logger.debug(f"Planned removals:  {len(removals)}")
+        logger.debug(f"Dry run:           {bool(env.dry_run)}")
+        logger.debug(f"Max add limit:     {env.max_add if env.max_add else 'none'}")
+        logger.debug("=" * 80)
 
-        if args.dry_run:
+        if env.dry_run:
             if plan.to_replace:
-                print("\n[DRY-RUN] Replacements:")
+                logger.debug("\n[DRY-RUN] Replacements:")
                 for c, prev_vid, _prev_pi in plan.to_replace[:50]:
-                    print(
+                    logger.debug(
                         f"  - song_key={c.song_key}  replace {prev_vid} -> {c.video_id}  quality={c.quality_tuple}  artist={c.artist}"
                     )
-                    print(f"    title: {c.title[:80]}")
+                    logger.debug(f"    title: {c.title[:80]}")
                 if len(plan.to_replace) > 50:
-                    print(f"  ... ({len(plan.to_replace) - 50} more)")
+                    logger.debug(f"  ... ({len(plan.to_replace) - 50} more)")
 
             if plan.to_add:
-                print("\n[DRY-RUN] Additions:")
+                logger.debug("\n[DRY-RUN] Additions:")
                 for c in plan.to_add[:50]:
-                    print(
+                    logger.debug(
                         f"  - add {c.video_id}  song_key={c.song_key}  quality={c.quality_tuple}  artist={c.artist}"
                     )
-                    print(f"    title: {c.title[:80]}")
+                    logger.debug(f"    title: {c.title[:80]}")
                 if len(plan.to_add) > 50:
-                    print(f"  ... ({len(plan.to_add) - 50} more)")
+                    logger.debug(f"  ... ({len(plan.to_add) - 50} more)")
 
             if removals:
-                print("\n[DRY-RUN] Removals:")
+                logger.debug("\n[DRY-RUN] Removals:")
                 for video_id, _pi, artist in removals[:50]:
-                    print(f"  - remove {video_id}  artist={artist} (no longer in CSV)")
+                    logger.debug(f"  - remove {video_id}  artist={artist} (no longer in CSV)")
                 if len(removals) > 50:
-                    print(f"  ... ({len(removals) - 50} more)")
+                    logger.debug(f"  ... ({len(removals) - 50} more)")
 
             return 0
 
@@ -1119,8 +1053,8 @@ def main(argv: List[str]) -> int:
         removed = 0
 
         def can_insert_more() -> bool:
-            if args.max_add and args.max_add > 0:
-                return added < args.max_add
+            if env.max_add and env.max_add > 0:
+                return added < env.max_add
             return True
 
         def save_state() -> None:
@@ -1136,24 +1070,24 @@ def main(argv: List[str]) -> int:
         try:
             # Replacements: insert-then-delete
             if plan.to_replace:
-                logger.info("Executing replacements...")
+                logger.debug("Executing replacements...")
 
             for c, prev_vid, prev_pi in plan.to_replace:
                 if not can_insert_more():
                     skipped_due_to_limit += 1
                     progress.skipped_due_to_limit += 1
                     progress.processed += 1
-                    progress.maybe_log(args.progress_every)
+                    progress.maybe_log(env.progress_every)
                     continue
 
                 try:
-                    new_pi = playlist_insert(youtube, args.playlist_id, c.video_id)
+                    new_pi = playlist_insert(youtube, env.playlist_id, c.video_id)
                     added += 1
                     replaced += 1
                     progress.added += 1
                     progress.replaced += 1
 
-                    logger.info(
+                    logger.debug(
                         f"Inserted {c.video_id} (playlistItemId={new_pi}) for song_key={c.song_key}"
                     )
 
@@ -1172,7 +1106,7 @@ def main(argv: List[str]) -> int:
                     # Best-effort delete old
                     try:
                         playlist_delete(youtube, prev_pi)
-                        logger.info(
+                        logger.debug(
                             f"Deleted old {prev_vid} (playlistItemId={prev_pi})"
                         )
                         items_by_video.pop(prev_vid, None)
@@ -1184,11 +1118,12 @@ def main(argv: List[str]) -> int:
                         )
 
                 except QuotaExhaustedError:
-                    logger.error(
+                    mark_oauth_exhausted()
+                    logger.warning(
                         "Quota exhausted during replacements. Saving progress..."
                     )
                     save_state()
-                    print(
+                    logger.debug(
                         f"\n[STOP] Quota exhausted. Progress: added={added}, replaced={replaced}, failed={failed}"
                     )
                     return 1
@@ -1206,30 +1141,30 @@ def main(argv: List[str]) -> int:
                     )
 
                 progress.processed += 1
-                progress.maybe_log(args.progress_every)
+                progress.maybe_log(env.progress_every)
 
             # Additions
             if plan.to_add:
-                logger.info("Executing additions...")
+                logger.debug("Executing additions...")
 
             for c in plan.to_add:
                 if not can_insert_more():
                     skipped_due_to_limit += 1
                     progress.skipped_due_to_limit += 1
                     progress.processed += 1
-                    progress.maybe_log(args.progress_every)
+                    progress.maybe_log(env.progress_every)
                     continue
 
                 if c.video_id in items_by_video:
                     progress.processed += 1
-                    progress.maybe_log(args.progress_every)
+                    progress.maybe_log(env.progress_every)
                     continue
 
                 try:
-                    pi = playlist_insert(youtube, args.playlist_id, c.video_id)
+                    pi = playlist_insert(youtube, env.playlist_id, c.video_id)
                     added += 1
                     progress.added += 1
-                    logger.info(
+                    logger.debug(
                         f"Added {c.video_id} (playlistItemId={pi}) song_key={c.song_key} artist={c.artist}"
                     )
 
@@ -1246,9 +1181,10 @@ def main(argv: List[str]) -> int:
                     song_map[c.song_key] = c.video_id
 
                 except QuotaExhaustedError:
-                    logger.error("Quota exhausted during additions. Saving progress...")
+                    mark_oauth_exhausted()
+                    logger.warning("Quota exhausted during additions. Saving progress...")
                     save_state()
-                    print(
+                    logger.debug(
                         f"\n[STOP] Quota exhausted. Progress: added={added}, replaced={replaced}, failed={failed}"
                     )
                     return 1
@@ -1264,16 +1200,16 @@ def main(argv: List[str]) -> int:
                     logger.error(f"Insert failed for {c.video_id}; skipping. ({e})")
 
                 progress.processed += 1
-                progress.maybe_log(args.progress_every)
+                progress.maybe_log(env.progress_every)
 
             # Removals
             if removals:
-                logger.info("Executing removals...")
+                logger.debug("Executing removals...")
 
             for video_id, playlist_item_id, artist in removals:
                 try:
                     playlist_delete(youtube, playlist_item_id)
-                    logger.info(f"Removed {video_id} (artist={artist})")
+                    logger.debug(f"Removed {video_id} (artist={artist})")
                     items_by_video.pop(video_id, None)
                     removed += 1
                     progress.removed += 1
@@ -1288,9 +1224,10 @@ def main(argv: List[str]) -> int:
                         song_map.pop(song_key, None)
 
                 except QuotaExhaustedError:
-                    logger.error("Quota exhausted during removals. Saving progress...")
+                    mark_oauth_exhausted()
+                    logger.warning("Quota exhausted during removals. Saving progress...")
                     save_state()
-                    print(
+                    logger.debug(
                         f"\n[STOP] Quota exhausted. Progress: added={added}, replaced={replaced}, failed={failed}"
                     )
                     return 1
@@ -1304,30 +1241,31 @@ def main(argv: List[str]) -> int:
                     logger.warning(f"Failed to remove {video_id}: {e}")
 
                 progress.processed += 1
-                progress.maybe_log(args.progress_every)
+                progress.maybe_log(env.progress_every)
 
         finally:
             # Always persist the latest known state at the end of execution phase
             save_state()
 
-        print("\n" + "=" * 80)
-        print("[DONE]")
-        print(f"Already present:          {plan.already_present}")
-        print(f"Added (inserts):          {added}")
-        print(f"Replaced (subset of add): {replaced}")
-        print(f"Removed:                  {removed}")
-        print(f"Skipped (worse):          {plan.skipped_worse}")
-        print(f"Skipped (max-add limit):  {skipped_due_to_limit}")
-        print(f"Failures (non-fatal):     {failed}")
-        print(f"Cache updated:            {cache_path}")
-        print("=" * 80)
+        logger.debug("\n" + "=" * 80)
+        logger.debug("[DONE]")
+        logger.debug(f"Already present:          {plan.already_present}")
+        logger.debug(f"Added (inserts):          {added}")
+        logger.debug(f"Replaced (subset of add): {replaced}")
+        logger.debug(f"Removed:                  {removed}")
+        logger.debug(f"Skipped (worse):          {plan.skipped_worse}")
+        logger.debug(f"Skipped (max-add limit):  {skipped_due_to_limit}")
+        logger.debug(f"Failures (non-fatal):     {failed}")
+        logger.debug(f"Cache updated:            {cache_path}")
+        logger.debug("=" * 80)
         return 0
 
     except InvalidPlaylistError as e:
         logger.error(str(e))
         return 1
     except QuotaExhaustedError as e:
-        logger.error(str(e))
+        mark_oauth_exhausted()
+        logger.warning(str(e))
         return 1
     except Exception as e:
         logger.exception(f"Unhandled error: {e}")
@@ -1335,4 +1273,9 @@ def main(argv: List[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    try:
+        sys.exit(main())
+    except QuotaExhaustedError:
+        mark_oauth_exhausted()
+        logger.warning("YouTube API quota exhausted — stopping")
+        sys.exit(2)

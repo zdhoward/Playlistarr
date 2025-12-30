@@ -23,24 +23,22 @@ Source of truth:
 
 from __future__ import annotations
 
-import argparse
-import json
-import logging
-import os
-import time
+from env import get_env
+
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-import config
 import filters
-from utils import playlist_cache_path, invalidation_plan_path
+import sys
+from api_manager import QuotaExhaustedError
+from utils import canonicalize_artist
+from logger import init_logging, get_logger
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
-logger = logging.getLogger(__name__)
-
+# ----------------------------
+# Logging
+# ----------------------------
+init_logging()
+logger = get_logger(__name__)
 
 # ============================================================
 # Helpers
@@ -99,7 +97,8 @@ def build_expected_videos(
     expected: Dict[str, Dict[str, Any]] = {}
 
     for artist in artists:
-        artist_dir = os.path.join(discovery_root, artist)
+        artist_key = canonicalize_artist(artist)
+        artist_dir = os.path.join(discovery_root, artist_key)
         if not os.path.isdir(artist_dir):
             logger.debug(f"No directory for artist: {artist}")
             continue
@@ -205,54 +204,64 @@ def build_invalidation_plan(
 # ============================================================
 
 
-def main() -> None:
-    """Main entry point."""
-    parser = argparse.ArgumentParser(
-        description="Generate invalidation plan for playlist cleanup"
-    )
-    parser.add_argument("artists_csv", help="Artist CSV used for discovery")
-    parser.add_argument("playlist_id", help="Target YouTube playlist ID")
-    args = parser.parse_args()
+from pathlib import Path
+import json
+import os
+import time
+from utils import playlist_cache_path, invalidation_plan_path
+import config
 
-    csv_path = Path(args.artists_csv)
+
+def main() -> None:
+    env = get_env()
+
+    csv_path = Path(env.artists_csv)
     csv_stem = csv_path.stem
+    playlist_id = env.playlist_id
 
     artists = load_artist_csv(str(csv_path))
-    logger.info(f"[invalidate] Loaded {len(artists)} artists")
+    logger.debug(f"[invalidate] Loaded {len(artists)} artists")
 
     discovery_root = os.path.join(config.DISCOVERY_ROOT, csv_stem)
     expected = build_expected_videos(artists, discovery_root)
-    logger.info(f"[invalidate] Expected valid videos: {len(expected)}")
+    logger.debug(f"[invalidate] Expected valid videos: {len(expected)}")
 
-    cache_path = playlist_cache_path(args.playlist_id)
+    cache_path = playlist_cache_path(playlist_id)
     playlist_videos = load_playlist_cache(cache_path)
-    logger.info(f"[invalidate] Playlist videos cached: {len(playlist_videos)}")
+    logger.debug(f"[invalidate] Playlist videos cached: {len(playlist_videos)}")
 
     if not playlist_videos:
         logger.warning(
             "[invalidate] Playlist cache is empty. "
             "Run playlist sync first to populate the cache."
         )
-        # Create empty plan instead of raising error
+
         plan = {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "actions": [],
         }
-        plan_path = invalidation_plan_path(args.playlist_id)
+
+        plan_path = invalidation_plan_path(playlist_id)
         with open(plan_path, "w", encoding="utf-8") as f:
             json.dump(plan, f, indent=2, ensure_ascii=False)
-        logger.info(f"[invalidate] Created empty plan at {plan_path}")
+
+        logger.debug(f"[invalidate] Created empty plan at {plan_path}")
         return
 
     plan = build_invalidation_plan(csv_stem, expected, playlist_videos)
-    logger.info(f"[invalidate] Planned removals: {len(plan['actions'])}")
+    logger.debug(f"[invalidate] Planned removals: {len(plan['actions'])}")
 
-    plan_path = invalidation_plan_path(args.playlist_id)
+    plan_path = invalidation_plan_path(playlist_id)
     with open(plan_path, "w", encoding="utf-8") as f:
         json.dump(plan, f, indent=2, ensure_ascii=False)
 
-    logger.info(f"[invalidate] Plan written to {plan_path}")
+    logger.debug(f"[invalidate] Plan written to {plan_path}")
+
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except QuotaExhaustedError:
+        logger.warning("YouTube API quota exhausted — stopping")
+        sys.exit(2)

@@ -15,10 +15,6 @@ All behavior is driven by config.py.
 
 from __future__ import annotations
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 import re
 from typing import Optional, Tuple
 

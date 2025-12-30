@@ -13,63 +13,47 @@ This file intentionally contains ONLY:
 It must NOT contain:
 - Business logic
 - API calls
-- Helper functions
+- Reading environment variables
+- Validation / side effects
 
-Logic belongs in:
-- filters.py
-- client.py
-- calling scripts
+Runtime configuration (env vars, profiles) belongs in:
+- env.py
+- playlistarr.py (CLI bootstrap)
+- runner.py (orchestration)
 """
 
-from dotenv import load_dotenv
-
-load_dotenv()
+from __future__ import annotations
 
 import os
-import sys
 import re
 from pathlib import Path
 from typing import Dict, List
-
-# Windows compatibility - ensure UTF-8 encoding
-if sys.platform == "win32":
-    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+from env import PROJECT_ROOT
 
 # ============================================================
-# FILESYSTEM PATHS
-# ============================================================
-# All paths are relative to project root.
-
-AUTH_DIR = "auth"
-CACHE_DIR = "cache"
-DISCOVERY_ROOT = "out"
-
-CLIENT_SECRETS_FILE = f"{AUTH_DIR}/client_secrets.json"
-OAUTH_TOKEN_FILE = f"{AUTH_DIR}/oauth_token.json"
-
-PLAYLIST_CACHE_FILE = f"{CACHE_DIR}/playlist_cache.json"
-
-
-# ============================================================
-# YouTube API — AUTH & ENDPOINTS
+# PROJECT PATHS
 # ============================================================
 
+AUTH_DIR = PROJECT_ROOT / "auth"
+CACHE_DIR = PROJECT_ROOT / "cache"
+DISCOVERY_ROOT = PROJECT_ROOT / "out"
+LOG_DIR = PROJECT_ROOT / "logs"
+PROFILES_DIR = PROJECT_ROOT / "profiles"
 
-def _load_api_keys() -> List[str]:
-    """Load API keys from environment variable."""
-    keys_str = os.environ.get("YOUTUBE_API_KEYS", "")
-    if not keys_str:
-        raise ValueError(
-            "YOUTUBE_API_KEYS environment variable not set. "
-            "Set it as comma-separated keys: export YOUTUBE_API_KEYS='key1,key2,key3'"
-        )
-    keys = [k.strip() for k in keys_str.split(",") if k.strip()]
-    if not keys:
-        raise ValueError("YOUTUBE_API_KEYS is empty after parsing")
-    return keys
+CLIENT_SECRETS_FILE = AUTH_DIR / "client_secrets.json"
+OAUTH_TOKEN_FILE = AUTH_DIR / "oauth_token.json"
+# Playlist cache / plans (actual filenames are generated elsewhere)
+PLAYLIST_CACHE_BASENAME = "playlist_{playlist_id}.json"
+INVALIDATION_PLAN_BASENAME = "invalidation_{playlist_id}.json"
 
+SLEEP_BETWEEN_CALLS_SEC = float(os.environ.get("YT_SLEEP_SEC", "0.15"))
+REQUEST_TIMEOUT = int(os.environ.get("YT_REQUEST_TIMEOUT", "30"))
+MAX_RETRIES = int(os.environ.get("YT_MAX_RETRIES", "3"))
+BACKOFF_BASE_SEC = float(os.environ.get("YT_BACKOFF_BASE_SEC", "1.0"))
 
-API_KEYS = _load_api_keys()
+# ============================================================
+# YOUTUBE API — ENDPOINTS / SCOPES
+# ============================================================
 
 SEARCH_URL = "https://www.googleapis.com/youtube/v3/search"
 VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
@@ -78,16 +62,26 @@ PLAYLIST_ITEMS_URL = "https://www.googleapis.com/youtube/v3/playlistItems"
 
 YOUTUBE_OAUTH_SCOPES = ["https://www.googleapis.com/auth/youtube"]
 
-COUNTRY_CODE = os.environ.get("YOUTUBE_COUNTRY_CODE", "CA")
+# Defaults only. env.py may override.
+DEFAULT_COUNTRY_CODE = "CA"
 
 # ============================================================
-# YOUTUBE API — SAFETY / THROTTLING
+# REQUEST THROTTLING DEFAULTS (env.py may override)
 # ============================================================
 
-SLEEP_BETWEEN_CALLS_SEC = float(os.environ.get("YT_SLEEP_SEC", "0.15"))
-REQUEST_TIMEOUT = int(os.environ.get("YT_REQUEST_TIMEOUT", "30"))
-MAX_RETRIES = int(os.environ.get("YT_MAX_RETRIES", "3"))
-BACKOFF_BASE_SEC = float(os.environ.get("YT_BACKOFF_BASE_SEC", "1.0"))
+DEFAULT_SLEEP_BETWEEN_CALLS_SEC = 0.15
+DEFAULT_REQUEST_TIMEOUT_SEC = 30
+DEFAULT_MAX_RETRIES = 3
+DEFAULT_BACKOFF_BASE_SEC = 1.0
+
+# Playlist mutations are intentionally slower (env.py/profile may override)
+DEFAULT_PLAYLIST_MUTATION_SLEEP_SEC = 1.0
+
+# Cache TTL default: 6 hours
+DEFAULT_CACHE_TTL_SECONDS = 6 * 60 * 60
+
+# YouTube API max page size for playlistItems.list is 50
+YOUTUBE_BATCH_SIZE = 50
 
 # ============================================================
 # DISCOVERY — CHANNEL RESOLUTION
@@ -153,8 +147,10 @@ NEGATIVE_TITLE_HARD = [
     # Long-form / compilations
     "full album",
     "album stream",
-    # Explicit acoustic markers
+    # Explicit acoustic markers / special cases
     "(acoustic)",
+    "(manga series)",
+    "(avril commentary)",
 ]
 
 # ============================================================
@@ -206,7 +202,7 @@ MAX_ACCEPTED_PER_ARTIST = 40
 FALLBACK_SEARCH_MAX_RESULTS = 10
 
 # ============================================================
-# ARTIST-SPECIFIC OVERRIDES
+# ARTIST-SPECIFIC OVERRIDES (defaults; profiles may override)
 # ============================================================
 
 ARTIST_MAX_VIDEO_YEAR: Dict[str, int] = {
@@ -225,8 +221,7 @@ ARTIST_IGNORE_TITLE_KEYWORDS: Dict[str, List[str]] = {
 
 MUSICBRAINZ_SEARCH_URL = "https://musicbrainz.org/ws/2/artist/"
 MUSICBRAINZ_ARTIST_URL = "https://musicbrainz.org/ws/2/artist/{mbid}"
-MUSICBRAINZ_RATE_LIMIT_SEC = 1.1
-
+MUSICBRAINZ_RATE_LIMIT_SEC = 2
 MB_HEADERS = {"User-Agent": "Playlistarr/1.0"}
 
 # ============================================================
@@ -305,31 +300,10 @@ BLOCKED_CHANNEL_KEYWORDS = [
 ]
 
 # ============================================================
-# PLAYLIST SYNC CONFIGURATION
+# LOGGING DEFAULTS (logger.py/env.py control actual behavior)
 # ============================================================
 
-PLAYLIST_MUTATION_SLEEP_SEC = 1.0
-CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", str(6 * 60 * 60)))
-YOUTUBE_BATCH_SIZE = 50
-
-
-# ============================================================
-# VALIDATION
-# ============================================================
-
-
-def validate_config() -> None:
-    """Validate configuration at startup."""
-    assert (
-        MIN_DURATION_SEC < MAX_DURATION_SEC
-    ), "MIN_DURATION_SEC must be less than MAX_DURATION_SEC"
-    assert API_KEYS, "No API keys configured"
-    assert len(API_KEYS) > 0, "API_KEYS list is empty"
-
-    # Ensure directories can be created
-    for directory in [AUTH_DIR, CACHE_DIR, DISCOVERY_ROOT]:
-        Path(directory).mkdir(parents=True, exist_ok=True)
-
-
-# Run validation on import
-validate_config()
+DEFAULT_LOG_DIR = "../logs"
+DEFAULT_LOG_RETENTION = 10
+DEFAULT_LOG_LEVEL = "INFO"
+DEFAULT_LOG_FORMAT = "text"

@@ -35,12 +35,12 @@ NEVER commit real API keys or secrets!
 # FILESYSTEM PATHS
 # ============================================================
 
-AUTH_DIR = "auth"  # OAuth credentials directory
-CACHE_DIR = "cache"  # Playlist caches
+AUTH_DIR = "../auth"  # OAuth credentials directory
+CACHE_DIR = "../cache"  # Playlist caches
 DISCOVERY_ROOT = "out"  # Discovery output
 
-CLIENT_SECRETS_FILE = "auth/client_secrets.json"  # OAuth client secrets
-OAUTH_TOKEN_FILE = "auth/oauth_token.json"  # OAuth token (auto-generated)
+CLIENT_SECRETS_FILE = "../auth/client_secrets.json"  # OAuth client secrets
+OAUTH_TOKEN_FILE = "../auth/oauth_token.json"  # OAuth token (auto-generated)
 
 # ============================================================
 # API CONFIGURATION
