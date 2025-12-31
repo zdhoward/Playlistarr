@@ -22,6 +22,9 @@ def _load_profile(name: str) -> Profile:
     profile_path = PROFILES_DIR / f"{name}.json"
     artists_csv = PROFILES_DIR / f"{name}.csv"
 
+    if not profile_path.exists():
+        raise RuntimeError(f"Profile '{name}' does not exist")
+
     data = json.loads(profile_path.read_text(encoding="utf-8"))
     playlist_id = str(data.get("playlist_id") or "").strip()
     if not playlist_id:
@@ -33,8 +36,13 @@ def _load_profile(name: str) -> Profile:
 def build_sync_parser(subparsers: argparse._SubParsersAction) -> None:
     sync = subparsers.add_parser("sync", help="Run the full pipeline")
     sync.add_argument("profile")
-    sync.add_argument("--verbose", action="store_true")
-    sync.add_argument("--quiet", action="store_true")
+
+    # These MUST live on the sync subcommand so:
+    #   playlistarr sync muchloud --verbose
+    # keeps working.
+    sync.add_argument("--verbose", action="store_true", help="Enable debug logging")
+    sync.add_argument("--quiet", action="store_true", help="Reduce console output")
+
     sync.set_defaults(_handler=handle_sync)
 
 
@@ -58,7 +66,8 @@ def handle_sync(args: argparse.Namespace) -> int:
     from logger import init_logging, get_logger
     from runner import run_once, RunResult
 
-    init_logging()
+    # Re-apply logging now that env flags are set
+    init_logging(module="sync", profile=profile.name)
     log = get_logger("playlistarr")
 
     log.info(PLAYLISTARR_BANNER)

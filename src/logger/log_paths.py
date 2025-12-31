@@ -5,8 +5,12 @@ from env import LOGS_DIR
 
 
 def module_logs_dir(command: str) -> Path:
-    return LOGS_DIR / command
+    path = LOGS_DIR / command
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def profile_logs_dir(command: str, profile: str) -> Path:
-    return LOGS_DIR / command / profile
+    path = LOGS_DIR / command / profile
+    path.mkdir(parents=True, exist_ok=True)
+    return path

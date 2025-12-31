@@ -1,78 +1,73 @@
 from __future__ import annotations
 
-"""bootstrap.py
-
-Process bootstrap for Playlistarr.
-
-This module is intentionally tiny and side-effectful.
-
-Rules:
-1) Only bootstrap is allowed to *mutate* os.environ for shared run context.
-2) Call bootstrap_base_env() exactly once at the true entrypoint.
-3) Call bootstrap_run_context() after argparse parsing, before init_logging().
-
-Everything else should treat environment variables as the source of truth.
-"""
-
 import os
-from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
-from env import PROJECT_ROOT, _load_dotenv, reset_env_caches
-
-
-_BOOTSTRAPPED = False
+from env import PROJECT_ROOT, reset_env_caches, _load_dotenv
 
 
-def bootstrap_base_env() -> None:
-    global _BOOTSTRAPPED
-    if _BOOTSTRAPPED:
-        return
+def bootstrap_base_env(
+    config_dir: str = "config",
+    env_file: str = ".env",
+    required: bool = False,
+) -> None:
+    """
+    Load PROJECT_ROOT/<config_dir>/<env_file> into os.environ.
 
-    dotenv_path = PROJECT_ROOT / "config" / ".env"
+    - Silent
+    - Never overrides existing vars
+    - Can be required if you want (required=True)
+    """
+    dotenv_path = (PROJECT_ROOT / config_dir / env_file).resolve()
 
-    if not dotenv_path.exists():
+    if required and not dotenv_path.exists():
         raise RuntimeError(
             f"Missing required env file: {dotenv_path}\n"
-            "Expected config/.env relative to project root."
+            f"Expected {config_dir}/{env_file} relative to project root."
         )
 
     _load_dotenv(dotenv_path)
-
-    os.environ.setdefault(
-        "PLAYLISTARR_RUN_ID",
-        datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
-    )
-    os.environ.setdefault("PLAYLISTARR_BOOTSTRAPPED", "1")
-
     reset_env_caches()
-    _BOOTSTRAPPED = True
 
 
 def bootstrap_run_context(
-    *,
-    command: str,
-    profile_name: str | None = None,
-    verbose: bool | None = None,
-    quiet: bool | None = None,
-    interactive: bool | None = None,
+    command: Optional[str] = None,
+    profile_name: Optional[str] = None,
+    profile_path: Optional[str] = None,
+    artists_csv: Optional[str] = None,
+    playlist_id: Optional[str] = None,
+    verbose: Optional[bool] = None,
+    quiet: Optional[bool] = None,
+    interactive: Optional[bool] = None,
 ) -> None:
-    """Establish run-scoped context used by logging + pipeline stages."""
+    """
+    Stamp run context into environment variables so subprocess stages inherit them.
+    """
+    if command is not None:
+        os.environ["PLAYLISTARR_COMMAND"] = str(command)
 
-    os.environ["PLAYLISTARR_COMMAND"] = command
+    if profile_path is not None:
+        os.environ["PLAYLISTARR_PROFILE_PATH"] = str(profile_path)
 
-    if profile_name:
-        os.environ["PLAYLISTARR_PROFILE_NAME"] = profile_name
+    if artists_csv is not None:
+        os.environ["PLAYLISTARR_ARTISTS_CSV"] = str(artists_csv)
+
+    if playlist_id is not None:
+        os.environ["PLAYLISTARR_PLAYLIST_ID"] = str(playlist_id)
+
+    if profile_name is not None:
+        os.environ["PLAYLISTARR_PROFILE_NAME"] = str(profile_name)
     else:
         os.environ.pop("PLAYLISTARR_PROFILE_NAME", None)
 
     if verbose is not None:
         os.environ["PLAYLISTARR_VERBOSE"] = "1" if verbose else "0"
+
     if quiet is not None:
         os.environ["PLAYLISTARR_QUIET"] = "1" if quiet else "0"
 
     if interactive is not None:
         os.environ["PLAYLISTARR_UI"] = "1" if interactive else "0"
 
-    # Context changes must invalidate cached env views.
     reset_env_caches()

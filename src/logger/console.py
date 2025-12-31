@@ -1,15 +1,15 @@
-# src/logger/console.py
 from __future__ import annotations
 
 import logging
 import sys
+from dataclasses import dataclass
+
 from rich.console import Console
 from rich.logging import RichHandler
 
-import os
-
 from env import get_logging_env
 
+# Console used by RichHandler (stdout so subprocess-forwarding works)
 UI_CONSOLE = Console(
     file=sys.stdout,
     force_terminal=True,
@@ -17,26 +17,40 @@ UI_CONSOLE = Console(
 )
 
 
+@dataclass(frozen=True)
 class ConsoleGateFilter(logging.Filter):
-    def filter(self, record: logging.LogRecord) -> bool:
-        env = get_logging_env()
+    """
+    Gate console output when interactive UI mode is enabled.
+    """
 
-        # Only suppress console logging if quiet mode is explicitly requested
-        if os.environ.get("PLAYLISTARR_UI") == "1":
+    def filter(self, record: logging.LogRecord) -> bool:
+        le = get_logging_env()
+
+        if le.quiet:
+            return False
+
+        # In interactive mode, only allow logs explicitly marked as passthrough
+        if le.interactive and not getattr(record, "passthrough", False):
             return False
 
         return True
 
 
-def build_console_handler(level: int) -> logging.Handler:
+def build_console_handler() -> logging.Handler:
     handler = RichHandler(
-        console=Console(file=sys.stderr),
-        show_time=False,
+        console=UI_CONSOLE,
         show_level=True,
+        show_time=False,
         show_path=False,
         markup=True,
     )
-    handler.setFormatter(logging.Formatter("| %(message)s"))
+
+    # IMPORTANT:
+    # - RichHandler renders the level column.
+    # - Formatter must NOT include %(levelname)s or you get duplicates.
+    # - Also don't prepend your own "|" — RichHandler already handles layout.
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
     handler.addFilter(ConsoleGateFilter())
     return handler
 

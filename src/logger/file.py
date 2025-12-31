@@ -1,4 +1,3 @@
-# src/logger/file.py
 from __future__ import annotations
 
 import logging
@@ -9,7 +8,7 @@ def build_file_handler(logfile: Path) -> logging.FileHandler:
     logfile.parent.mkdir(parents=True, exist_ok=True)
 
     handler = logging.FileHandler(logfile, encoding="utf-8")
-    handler.setLevel(logging.NOTSET)  # obey root LOG_LEVEL
+    handler.setLevel(logging.NOTSET)
 
     handler.setFormatter(
         logging.Formatter(
@@ -21,9 +20,6 @@ def build_file_handler(logfile: Path) -> logging.FileHandler:
 
 
 def repoint_file_handler(handler: logging.FileHandler, new_logfile: Path) -> None:
-    """
-    Repoint an existing FileHandler to a new path without stacking handlers.
-    """
     new_logfile.parent.mkdir(parents=True, exist_ok=True)
 
     handler.acquire()

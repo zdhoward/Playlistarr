@@ -41,9 +41,10 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: pytest -q
+        entry: python -c "import os,sys,pytest; os.environ['PYTHONPATH']='src'; sys.exit(pytest.main(['-q']))"
         language: system
         pass_filenames: false
+
 
       - id: secret-scan
         name: simple secret scan
