@@ -1,23 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Tuple
-
-from paths import module_logs_dir, profile_logs_dir
+from env import LOGS_DIR
 
 
-def resolve_log_target(
-    command: str,
-    run_id: str,
-    profile: str | None,
-) -> Tuple[Path, Path]:
-    """
-    Return (log_dir, log_file_path)
-    """
-    if profile:
-        log_dir = profile_logs_dir(command, profile)
-    else:
-        log_dir = module_logs_dir(command)
+def module_logs_dir(command: str) -> Path:
+    return LOGS_DIR / command
 
-    logfile = log_dir / f"{command}-{run_id}.log"
-    return log_dir, logfile
+
+def profile_logs_dir(command: str, profile: str) -> Path:
+    return LOGS_DIR / command / profile

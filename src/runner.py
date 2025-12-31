@@ -1,153 +1,127 @@
-#!/usr/bin/env python3
 from __future__ import annotations
 
+import csv
 import os
 import subprocess
 import sys
-import time
+import logging
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Optional
+import re
 
-from branding import PLAYLISTARR_BANNER
-from env import get_env
+from branding import PLAYLISTARR_HEADER, PLAYLISTARR_SECTION_END
+from env import PROJECT_ROOT, get_env
 from logger import get_logger
 from ui import InteractiveUI
-from ui_events import try_parse_ui_event
+from ui.events import try_parse_ui_event
 
-logger = get_logger("runner")
-
-
-# ============================================================================
-# Models
-# ============================================================================
+log = get_logger("playlistarr.runner")
 
 
-class RunResult(Enum):
-    OK = "completed"  # ran fully, up-to-date
-    API_QUOTA = "api_quota"  # controlled stop (discovery quota)
-    OAUTH_QUOTA = "oauth_quota"  # controlled stop (oauth quota)
-    AUTH_INVALID = "auth_invalid"  # action required
-    FAILED = "failed"  # unexpected failure
+class RunResult(str, Enum):
+    OK = "ok"
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    AUTH_INVALID = "auth_invalid"
+    FAILED = "failed"
+    SKIPPED = "skipped"
 
 
-@dataclass
-class StepResult:
+@dataclass(frozen=True)
+class StageResult:
     name: str
+    state: RunResult
     exit_code: int
-    seconds: float
-    stopped_pipeline: bool = False
-    note: str = ""
+    reason: Optional[str] = None
 
 
-@dataclass
-class RunSummary:
+@dataclass(frozen=True)
+class RunOutcome:
     overall: RunResult
-    steps: list[StepResult]
+    stages: list[StageResult]
 
 
-# ============================================================================
-# Helpers
-# ============================================================================
+_STAGES: list[tuple[str, list[str]]] = [
+    ("Discovery", [sys.executable, "-m", "discover_music_videos"]),
+    ("Invalidation (Plan)", [sys.executable, "-m", "playlist_invalidate"]),
+    ("Invalidation (Apply)", [sys.executable, "-m", "playlist_apply_invalidation"]),
+    ("Sync", [sys.executable, "-m", "youtube_playlist_sync"]),
+]
 
 
-def _project_root() -> Path:
-    return Path(__file__).resolve().parent
+def _count_artists(csv_path: Path) -> int:
+    count = 0
+    saw_first = False
+    with csv_path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:
+                continue
+            v = (row[0] or "").strip()
+            if not v:
+                continue
+            if not saw_first:
+                saw_first = True
+                if v.lower() == "artist":
+                    continue
+            count += 1
+    return count
 
 
-def _py() -> str:
-    return sys.executable
-
-
-def _stage_status(stage_name: str, exit_code: int) -> str:
-    """
-    UI-only stage status mapping.
-
-    Important nuance:
-      - oauth_health_check.py uses exit_code 2 => AUTH INVALID
-      - mutation stages (apply/sync) use exit_code 2 => OAUTH QUOTA
-      - exit_code 1 => quota exhausted (API keys) in your pipeline
-    """
+def _infer_state(exit_code: int, tail: str) -> RunResult:
     if exit_code == 0:
-        return "completed"
-    if exit_code == 1:
-        return "quota_exhausted"
+        return RunResult.OK
+    if exit_code == 10:
+        return RunResult.QUOTA_EXHAUSTED
+    if exit_code == 12:
+        return RunResult.AUTH_INVALID
 
-    if exit_code == 2:
-        if stage_name.lower().startswith("oauth health"):
-            return "auth_invalid"
-        return "quota_exhausted"
+    t = tail.lower()
+    if "quota" in t:
+        return RunResult.QUOTA_EXHAUSTED
+    if "auth_invalid" in t or "reauth" in t:
+        return RunResult.AUTH_INVALID
 
-    return "failed"
-
-
-# ============================================================================
-# Script runners
-# ============================================================================
+    return RunResult.FAILED
 
 
-def _run_script(
-    script: str,
-    args: list[str] | None = None,
+def _log_header(title: str) -> None:
+    log.info(PLAYLISTARR_HEADER(title).rstrip("\n"))
+
+
+def _log_footer() -> None:
+    log.info(PLAYLISTARR_SECTION_END())
+
+
+def _run_stage(
     *,
+    index: int,
+    total: int,
     name: str,
-    stop_on_codes: set[int] | None = None,
-    allow_fail: bool = False,
-) -> StepResult:
-    if args is None:
-        args = []
-    if stop_on_codes is None:
-        stop_on_codes = set()
-
-    cmd = [_py(), str(_project_root() / script), *args]
-    start = time.time()
-
-    try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(_project_root()),
-            env=os.environ.copy(),
-            text=True,
-        )
-        code = int(proc.returncode)
-    except Exception as e:
-        # This is a runner failure (not a stage exit code)
-        return StepResult(name, 99, time.time() - start, True, str(e))
-
-    dur = time.time() - start
-    stopped = code in stop_on_codes
-
-    return StepResult(name, code, dur, stopped)
-
-
-def _run_script_interactive(
-    script: str,
-    *,
-    name: str,
-    ui: InteractiveUI,
-    args: list[str] | None = None,
-    stop_on_codes: set[int] | None = None,
-    allow_fail: bool = False,
-) -> StepResult:
-    if args is None:
-        args = []
-    if stop_on_codes is None:
-        stop_on_codes = set()
-
-    # Force UI mode for subprocesses
+    argv: list[str],
+    csv_path: Path,
+    playlist_id: str,
+    verbose: bool,
+    quiet: bool,
+    ui: Optional[InteractiveUI],
+) -> StageResult:
     env = os.environ.copy()
-    env["PLAYLISTARR_UI"] = "1"
-    env["PLAYLISTARR_QUIET"] = "1"
-    env["PLAYLISTARR_VERBOSE"] = "0"
+    env.setdefault("PLAYLISTARR_ARTISTS_CSV", str(csv_path))
+    env.setdefault("PLAYLISTARR_PLAYLIST_ID", playlist_id)
+    env["PLAYLISTARR_VERBOSE"] = "1" if verbose else "0"
+    env["PLAYLISTARR_QUIET"] = "1" if quiet else "0"
 
-    cmd = [_py(), str(_project_root() / script), *args]
-    start = time.time()
-    last_line: Optional[str] = None
+    if ui is not None:
+        env["PLAYLISTARR_QUIET"] = "1"
+        env["PLAYLISTARR_VERBOSE"] = "0"
+
+    if not quiet:
+        _log_header(f"Stage {index}/{total}: {name}")
 
     proc = subprocess.Popen(
-        cmd,
-        cwd=str(_project_root()),
+        argv + [str(csv_path), playlist_id],
+        cwd=str(PROJECT_ROOT),
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -155,223 +129,166 @@ def _run_script_interactive(
         bufsize=1,
     )
 
+    tail_lines: list[str] = []
+
+    if ui is not None:
+        ui.state.stage = name
+        ui.state.stage_index = index
+        ui.state.stage_total = total
+        ui.render()
+
     assert proc.stdout is not None
+    for raw in proc.stdout:
+        line = raw.rstrip("\n")
+        if not line:
+            continue
 
-    try:
-        for raw in proc.stdout:
-            line = raw.rstrip("\n")
-            if not line:
-                continue
+        tail_lines.append(line)
 
-            evt = try_parse_ui_event(line)
-            if evt:
-                _apply_ui_event(ui, evt)
-                ui.render()
-                continue
+        evt = try_parse_ui_event(line)
+        if evt is not None and ui is not None:
+            ui.apply_event(evt)
+            ui.render()
+            continue
 
-            last_line = line
-            logger.debug(f"[{name}] {line}")
-    except Exception as e:
-        # If we blow up reading stdout, try to stop the child and return a runner failure code.
-        try:
-            proc.kill()
-        except Exception:
-            pass
-        dur = time.time() - start
-        return StepResult(name, 99, dur, True, f"interactive read failed: {e}")
+        if not quiet:
+            # 🔑 KEY FIX: do NOT re-level passthrough output
+            level, msg = _parse_child_level(line)
 
-    code = int(proc.wait())
-    dur = time.time() - start
-    stopped = code in stop_on_codes
-    note = last_line or ""
+            if level is None:
+                # No child level prefix; treat as INFO passthrough
+                log.info(msg, extra={"passthrough": True})
+            else:
+                # Child provided a level; re-emit at that level with prefix stripped
+                log.log(level, msg, extra={"passthrough": True})
 
-    return StepResult(name, code, dur, stopped, note)
+    exit_code = proc.wait()
+    tail = "\n".join(tail_lines[-200:])
+    state = _infer_state(exit_code, tail)
 
+    if ui is not None:
+        ui.summary.stages[name] = state.value
+        if state != RunResult.OK:
+            ui.summary.stop_reason = state.value
+        ui.render()
 
-def _apply_ui_event(ui: InteractiveUI, evt: dict) -> None:
-    event = evt.get("event")
+    if not quiet:
+        _log_header(f"Stage {index} END: {name} ({state.value})")
+        _log_footer()
 
-    if event == "stage_start":
-        ui.set_stage(
-            evt.get("stage", ""), index=evt.get("index", 0), total=evt.get("total", 0)
-        )
-        ui.set_task(evt.get("task", ""))
-        return
-
-    if event == "artist_start":
-        ui.set_artist(evt.get("artist", ""))
-        ui.set_task(evt.get("task", ""))
-        ui.set_counts(old=evt.get("old"), new=evt.get("new"))
-        ui.set_api_key(index=evt.get("api_key_index"), total=evt.get("api_key_total"))
-        return
-
-    if event == "artist_done":
-        ui.push_history(evt.get("artist", ""))
-        ui.set_progress(completed=evt.get("index"))
-        return
-
-    if event == "detail":
-        ui.push_detail(evt.get("line", ""), style=evt.get("style", "dim"))
+    return StageResult(name=name, state=state, exit_code=exit_code)
 
 
-# ============================================================================
-# Orchestrator
-# ============================================================================
-
-
-def run_once() -> RunSummary:
+def run_once(
+    *,
+    profile: str | None = None,
+    csv_path: str | Path | None = None,
+    playlist_id: str | None = None,
+    verbose: bool | None = None,
+    quiet: bool | None = None,
+) -> RunOutcome:
     env = get_env()
-    interactive = env.interactive
 
-    ui: Optional[InteractiveUI] = None
-    steps: list[StepResult] = []
+    resolved_csv = Path(csv_path) if csv_path else Path(env.artists_csv)
+    resolved_playlist = playlist_id or env.playlist_id
 
-    # The single source of truth for final outcome.
-    # Must be set before every return path; also finalized in `finally`.
-    final_result: RunResult = RunResult.FAILED
+    ctx_verbose = bool(verbose) if verbose is not None else env.verbose
+    ctx_quiet = bool(quiet) if quiet is not None else env.quiet
 
-    def run_stage(**kw) -> StepResult:
-        if interactive:
-            assert ui is not None
-            return _run_script_interactive(ui=ui, **kw)
-        return _run_script(**kw)
+    use_ui = env.interactive and not ctx_verbose and not ctx_quiet
+    ui: Optional[InteractiveUI] = InteractiveUI() if use_ui else None
+
+    if ui is not None:
+        os.environ["PLAYLISTARR_UI"] = "1"
+        ui.start()
+        try:
+            ui.state.progress_total = _count_artists(resolved_csv)
+        except Exception:
+            ui.state.progress_total = 0
+        ui.render()
+
+    results: list[StageResult] = []
+    overall: RunResult = RunResult.OK
+    block_reason: Optional[str] = None
 
     try:
-        if interactive:
-            ui = InteractiveUI()
-            ui.start()
-            ui.push_detail(PLAYLISTARR_BANNER.strip(), style="bold")
-            ui.render(force=True)
+        for i, (name, argv) in enumerate(_STAGES, start=1):
+            if block_reason is not None:
+                if not ctx_quiet:
+                    _log_header(
+                        f"Stage {i}/{len(_STAGES)} SKIPPED: {name} (blocked_by_{block_reason})"
+                    )
+                results.append(
+                    StageResult(
+                        name=name,
+                        state=RunResult.SKIPPED,
+                        exit_code=-1,
+                        reason=f"blocked_by_{block_reason}",
+                    )
+                )
+                continue
 
-        # ------------------------------------------------------------
-        # OAuth Health
-        # ------------------------------------------------------------
-        oauth = run_stage(
-            script="oauth_health_check.py", name="OAuth Health Check", stop_on_codes={2}
-        )
-        steps.append(oauth)
-        if ui:
-            ui.mark_stage(
-                "OAuth Health Check",
-                _stage_status("OAuth Health Check", oauth.exit_code),
+            r = _run_stage(
+                index=i,
+                total=len(_STAGES),
+                name=name,
+                argv=argv,
+                csv_path=resolved_csv,
+                playlist_id=resolved_playlist,
+                verbose=ctx_verbose,
+                quiet=ctx_quiet,
+                ui=ui,
             )
+            results.append(r)
 
-        if oauth.exit_code == 2:
-            final_result = RunResult.AUTH_INVALID
-            return RunSummary(final_result, steps)
-
-        if oauth.exit_code != 0:
-            final_result = RunResult.FAILED
-            return RunSummary(final_result, steps)
-
-        # ------------------------------------------------------------
-        # Discovery (API keys)
-        # ------------------------------------------------------------
-        disc = run_stage(
-            script="discover_music_videos.py", name="Discovery", allow_fail=True
-        )
-        steps.append(disc)
-        if ui:
-            ui.mark_stage("Discovery", _stage_status("Discovery", disc.exit_code))
-
-        # If discovery returns quota exhausted (1), that's a controlled stop.
-        # We still might have already produced partial outputs for later stages;
-        # but your pipeline has always allowed discovery to stop safely.
-        if disc.exit_code == 1:
-            final_result = RunResult.API_QUOTA
-            return RunSummary(final_result, steps)
-
-        if disc.exit_code != 0:
-            final_result = RunResult.FAILED
-            return RunSummary(final_result, steps)
-
-        # ------------------------------------------------------------
-        # Invalidate Plan
-        # ------------------------------------------------------------
-        invp = run_stage(script="playlist_invalidate.py", name="Invalidation Plan")
-        steps.append(invp)
-        if ui:
-            ui.mark_stage(
-                "Invalidation Plan", _stage_status("Invalidation Plan", invp.exit_code)
-            )
-
-        if invp.exit_code != 0:
-            final_result = RunResult.FAILED
-            return RunSummary(final_result, steps)
-
-        # ------------------------------------------------------------
-        # Invalidate Apply (OAuth mutation)
-        # ------------------------------------------------------------
-        inva = run_stage(
-            script="playlist_apply_invalidation.py",
-            name="Invalidation Apply",
-            stop_on_codes={2},
-            allow_fail=True,
-        )
-        steps.append(inva)
-        if ui:
-            ui.mark_stage(
-                "Invalidation Apply",
-                _stage_status("Invalidation Apply", inva.exit_code),
-            )
-
-        # In your current pipeline, apply uses exit_code 2 for OAuth quota exhaustion
-        if inva.exit_code == 2:
-            final_result = RunResult.OAUTH_QUOTA
-            return RunSummary(final_result, steps)
-
-        if inva.exit_code != 0:
-            final_result = RunResult.FAILED
-            return RunSummary(final_result, steps)
-
-        # ------------------------------------------------------------
-        # Playlist Sync (OAuth mutation)
-        # ------------------------------------------------------------
-        sync = run_stage(
-            script="youtube_playlist_sync.py",
-            name="Playlist Sync",
-            stop_on_codes={2},
-            allow_fail=True,
-        )
-        steps.append(sync)
-        if ui:
-            ui.mark_stage(
-                "Playlist Sync", _stage_status("Playlist Sync", sync.exit_code)
-            )
-
-        if sync.exit_code == 2:
-            final_result = RunResult.OAUTH_QUOTA
-            return RunSummary(final_result, steps)
-
-        if sync.exit_code != 0:
-            final_result = RunResult.FAILED
-            return RunSummary(final_result, steps)
-
-        final_result = RunResult.OK
-        return RunSummary(final_result, steps)
-
-    except KeyboardInterrupt:
-        # Still emit RUN_STATUS and close UI in finally.
-        final_result = RunResult.FAILED
-        raise
-
-    except Exception:
-        # Still emit RUN_STATUS and close UI in finally.
-        final_result = RunResult.FAILED
-        raise
+            if r.state != RunResult.OK:
+                overall = r.state
+                block_reason = r.state.value
 
     finally:
-        # Persist final run status to log (machine-readable, exactly once).
-        # This MUST happen regardless of early returns or exceptions.
-        try:
-            logger.info(f"RUN_STATUS={final_result.value}")
-        except Exception:
-            pass
+        if ui is not None:
+            # 🔑 Authoritatively commit stage results
+            for r in results:
+                ui.summary.stages[r.name] = r.state.value
+            if overall != RunResult.OK:
+                ui.summary.stop_reason = overall.value
+            else:
+                ui.summary.stop_reason = "completed"
+            ui.stop()
+            ui.print_summary()
+            os.environ.pop("PLAYLISTARR_UI", None)
 
-        if ui:
-            try:
-                ui.summary.stop_reason = final_result.value
-                ui.stop()
-                ui.print_summary()
-            except Exception:
-                pass
+    return RunOutcome(overall=overall, stages=results)
+
+
+_CHILD_LEVEL_RE = re.compile(
+    r"""
+    ^\s*
+    (?:
+        \[\s*(DEBUG|INFO|WARNING|ERROR|CRITICAL)\s*\]
+        |
+        (DEBUG|INFO|WARNING|ERROR|CRITICAL)
+    )
+    \s+
+    (.*\S)?\s*$
+    """,
+    re.VERBOSE,
+)
+
+_LEVEL_MAP: dict[str, int] = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+    "CRITICAL": logging.CRITICAL,
+}
+
+
+def _parse_child_level(line: str) -> tuple[int | None, str]:
+    m = _CHILD_LEVEL_RE.match(line)
+    if not m:
+        return None, line.rstrip()
+
+    lvl = (m.group(1) or m.group(2) or "").upper()
+    rest = (m.group(3) or "").rstrip()
+    return _LEVEL_MAP.get(lvl), rest

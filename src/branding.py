@@ -1,3 +1,32 @@
+from __future__ import annotations
+
+import shutil
+from typing import Iterable, Literal
+
+# --------------------------------------------------
+# Layout constants
+# --------------------------------------------------
+
+DEFAULT_WIDTH = 80
+LOG_GUTTER_WIDTH = 10  # "[ INFO ]  " etc.
+
+Width = int | Literal["auto"]
+
+
+def _resolve_width(width: Width) -> int:
+    if width == "auto":
+        try:
+            cols = shutil.get_terminal_size().columns
+        except Exception:
+            cols = DEFAULT_WIDTH
+        return max(DEFAULT_WIDTH, cols - LOG_GUTTER_WIDTH)
+    return max(DEFAULT_WIDTH, int(width))
+
+
+# --------------------------------------------------
+# Banner
+# --------------------------------------------------
+
 PLAYLISTARR_BANNER = """
 
  _____ _         _ _     _
@@ -6,52 +35,134 @@ PLAYLISTARR_BANNER = """
 |__|  |_|__,|_  |_|_|___|_| |__,|_| |_|
             |___|
 
-
 """
 
 
-def PLAYLISTARR_HEADER(title: str, pad=8, motif="•⊱✦⊰•", min_width=80):
+# --------------------------------------------------
+# Headers / sections
+# --------------------------------------------------
+
+
+def PLAYLISTARR_HEADER(
+    title: str,
+    *,
+    width: Width = DEFAULT_WIDTH,
+    pad: int = 8,
+    motif: str = "•⊱✦⊰•",
+) -> str:
     title = title.strip()
+    w = _resolve_width(width)
+    inner = w - 2
 
-    # Natural content width
-    content_width = len(title) + pad * 2
+    min_title = len(title) + pad * 2
+    inner = max(inner, min_title)
 
-    # Enforce minimum width
-    content_width = max(content_width, min_width)
+    filler = inner - len(motif)
+    left = filler // 2
+    right = filler - left
 
-    motif_width = len(motif)
+    top = f"╔{'═' * left}{motif}{'═' * right}╗"
+    mid = f"│{title.center(inner)}│"
+    bot = f"╚{'═' * left}{motif}{'═' * right}╝"
 
-    # How much space is available for filler after motif
-    filler_space = content_width - motif_width
-
-    # Split evenly
-    left_width = filler_space // 2
-    right_width = filler_space - left_width
-
-    left_fill = "═" * left_width
-    right_fill = "═" * right_width
-
-    top = f"╔{left_fill}{motif}{right_fill}╗"
-    bottom = f"╚{left_fill}{motif}{right_fill}╝"
-
-    centered_title = title.center(content_width)
-    middle = f"│{centered_title}│"
-
-    return f"\n\n{top}\n{middle}\n{bottom}\n"
+    return f"\n{top}\n{mid}\n{bot}\n\n"
 
 
-def make_footer(width):
-    return f"╚{'═' * (width - 2)}╝"
+def PLAYLISTARR_DIVIDER(
+    *,
+    width: Width = DEFAULT_WIDTH,
+    char: str = "⫘",
+) -> str:
+    w = _resolve_width(width)
+    return f"\n{char * w}\n"
 
 
-PLAYLISTARR_SECTION_END = """
+def PLAYLISTARR_SECTION_END(
+    *,
+    width: Width = DEFAULT_WIDTH,
+    motif: str = "•⊱✦⊰•",
+    fill: str = "━",
+) -> str:
+    w = _resolve_width(width)
+    side = max(0, (w - len(motif)) // 2)
+    line = f"{fill * side}{motif}{fill * (w - side - len(motif))}"
+    return f"\n{line}\n"
 
-・‥…━━━━━━━•⊱✦⊰•━━━━━━━…‥・
 
-"""
+# --------------------------------------------------
+# Boxed blocks (highlight sections)
+# --------------------------------------------------
 
-PLAYLISTARR_DIVIDER = """
 
-⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘⫘
+def PLAYLISTARR_BOX(
+    lines: Iterable[str],
+    *,
+    title: str | None = None,
+    width: Width = DEFAULT_WIDTH,
+) -> str:
+    w = _resolve_width(width)
+    inner = w - 2
 
-"""
+    out: list[str] = []
+    out.append(f"╔{'═' * inner}╗")
+
+    if title:
+        out.append(f"║{title.center(inner)}║")
+        out.append(f"╟{'─' * inner}╢")
+
+    for line in lines:
+        out.append(f"║ {line.ljust(inner - 1)}║")
+
+    out.append(f"╚{'═' * inner}╝")
+    return "\n".join(out)
+
+
+# --------------------------------------------------
+# Symbols (JetBrains + Playlistarr)
+# --------------------------------------------------
+
+
+class SYMBOLS:
+    # Status
+    OK = "✔"
+    FAIL = "✖"
+    WARN = "⚠"
+    INFO = "ℹ"
+
+    # Flow
+    RUNNING = "▶"
+    DONE = "✓"
+    SKIPPED = "⤼"
+    BLOCKED = "⛔"
+    RETRY = "↻"
+
+    # Stages
+    DISCOVERY = "🔍"
+    INVALIDATE = "🚫"
+    APPLY = "🧹"
+    SYNC = "🔄"
+
+    # Playlist ops
+    ADD = "➕"
+    REMOVE = "➖"
+    KEEP = "✔"
+
+    # Music
+    MUSIC = "🎵"
+    NOTE = "♪"
+    ARTIST = "🎤"
+    ALBUM = "💿"
+    TRACK = "🎶"
+    VIDEO = "🎬"
+    PLAYLIST = "📻"
+
+    # Infra
+    API = "🔌"
+    QUOTA = "📊"
+    AUTH = "🔒"
+
+    # Files
+    FILE = "📄"
+    FOLDER = "📁"
+    CACHE = "🗄️"
+    SAVE = "💾"

@@ -9,9 +9,6 @@ def clean_env_and_modules(monkeypatch):
     Ensure tests don't leak env, logger state, or cached path resolution.
     """
 
-    # -----------------------------
-    # Clean environment variables
-    # -----------------------------
     keys = [
         "PLAYLISTARR_LOGS_DIR",
         "PLAYLISTARR_AUTH_DIR",
@@ -25,17 +22,19 @@ def clean_env_and_modules(monkeypatch):
         "PLAYLISTARR_QUIET",
         "PLAYLISTARR_ARTISTS_CSV",
         "PLAYLISTARR_PLAYLIST_ID",
+        "PLAYLISTARR_UI",
     ]
     for k in keys:
         monkeypatch.delenv(k, raising=False)
 
-    # Minimal required env for Environment()
+    # Minimal required env
     monkeypatch.setenv("PLAYLISTARR_ARTISTS_CSV", "dummy.csv")
     monkeypatch.setenv("PLAYLISTARR_PLAYLIST_ID", "DUMMY_PLAYLIST")
 
-    # -----------------------------
+    # 🔑 Ensure UI never activates in tests
+    monkeypatch.setenv("PLAYLISTARR_UI", "0")
+
     # Reset logger global state
-    # -----------------------------
     import logger.state
 
     logger.state.INITIALIZED = False
@@ -46,9 +45,7 @@ def clean_env_and_modules(monkeypatch):
     for h in list(root.handlers):
         root.removeHandler(h)
 
-    # -----------------------------
-    # Force re-evaluation of paths
-    # -----------------------------
+    # Force re-import of path + logger modules
     for mod in [
         "paths",
         "logger",

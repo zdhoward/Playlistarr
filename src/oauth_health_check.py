@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from auth.health import check_auth_health
+from auth.health import check
 from auth.errors import AuthError
 from auth.base import AuthHealthStatus
 from logger import get_logger
@@ -23,7 +23,7 @@ def main() -> int:
     logger = get_logger(__name__)
 
     try:
-        result = check_auth_health(provider_name="youtube")
+        result = check(provider_name="youtube")
     except AuthError as e:
         logger.error("oauth.health.error", exc_info=e)
         return 3

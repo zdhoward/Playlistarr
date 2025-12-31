@@ -36,7 +36,7 @@ import filters
 from api_manager import APIKeyManager, QuotaExhaustedError, http_get_json
 from utils import discovery_output_path, read_json_safe, write_json
 from logger import init_logging, get_logger
-from ui_events import emit_ui_event
+from ui.events import emit_ui_event
 
 # ----------------------------
 # Logging

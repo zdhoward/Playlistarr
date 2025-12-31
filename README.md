@@ -7,7 +7,7 @@
 ![Last Commit](https://img.shields.io/github/last-commit/zdhoward/playlistarr)
 ![Status](https://img.shields.io/badge/status-beta-yellow)
 
-### **Version:** 1.2.1
+### **Version:** 1.2.2
 
 Playlistarr is a **production-grade YouTube playlist automation engine** for homelabbers and self-hosters.
 

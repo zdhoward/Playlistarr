@@ -18,7 +18,7 @@ where = ["src"]
 
 [project]
 name = "playlistarr"
-version = "1.2.0"
+version = "1.2.2"
 description = "Quota-aware, log-driven YouTube playlist automation engine"
 requires-python = ">=3.10"
 
@@ -65,7 +65,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
 
     # CLI / logging
-    "rich>=13.7.0",
+    "rich==13.7.0",
 ]
 
 # -------------------------------------------------
@@ -99,3 +99,20 @@ strict = false
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning:httplib2\\..*",
+]
+
+[tool.flake8]
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "env",
+    "build",
+    "dist",
+    ".eggs",
+    "*.egg-info",
+]
+max-line-length = 100

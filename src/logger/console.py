@@ -1,42 +1,43 @@
+# src/logger/console.py
 from __future__ import annotations
 
 import logging
-
+import sys
+from rich.console import Console
 from rich.logging import RichHandler
 
+from env import get_logging_env
 
-_MESSAGE_COLUMN = 12
+UI_CONSOLE = Console(
+    file=sys.stdout,
+    force_terminal=True,
+    soft_wrap=True,
+)
 
 
-class BracketedLevelFilter(logging.Filter):
-    LEVEL_STYLES = {
-        "DEBUG": "dim",
-        "INFO": "green",
-        "WARNING": "yellow",
-        "ERROR": "red",
-        "CRITICAL": "bold red",
-    }
-
+class ConsoleGateFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        level = f"[ {record.levelname} ]"
-        style = self.LEVEL_STYLES.get(record.levelname, "")
-        if style:
-            level = f"[{style}]{level}[/{style}]"
+        env = get_logging_env()
 
-        padding = max(1, _MESSAGE_COLUMN - len(record.levelname) - 4)
-        record.msg = f"{level}{' ' * padding}{record.getMessage()}"
-        record.args = ()
+        # Only suppress console logging if quiet mode is explicitly requested
+        if env.quiet:
+            return False
+
         return True
 
 
 def build_console_handler(level: int) -> logging.Handler:
-    console = RichHandler(
-        level=level,
-        rich_tracebacks=True,
+    handler = RichHandler(
+        console=Console(file=sys.stderr),
         show_time=False,
-        show_level=False,
+        show_level=True,
         show_path=False,
         markup=True,
     )
-    console.addFilter(BracketedLevelFilter())
-    return console
+    handler.setFormatter(logging.Formatter("| %(message)s"))
+    handler.addFilter(ConsoleGateFilter())
+    return handler
+
+
+def log_passthrough(level: int, msg: str) -> None:
+    logging.getLogger().log(level, msg, extra={"passthrough": True})

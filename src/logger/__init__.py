@@ -1,99 +1,110 @@
+# src/logger/__init__.py
 from __future__ import annotations
 
 import logging
+import os
+from datetime import datetime
+from pathlib import Path
 
 from env import get_logging_env
-from . import state
-from .context import resolve_run_id, resolve_command, resolve_profile
-from .log_paths import resolve_log_target
-from .retention import enforce_retention
-from .file import build_file_handler, repoint_file_handler
 from .console import build_console_handler
-
-
-# ---------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------
+from .file import build_file_handler, repoint_file_handler
+from .log_paths import module_logs_dir, profile_logs_dir
+from .retention import enforce_retention
+from . import state as _state
 
 
 def get_logger(name: str) -> logging.Logger:
+    # No handlers, no levels, no propagation changes here.
     return logging.getLogger(name)
+
+
+def _level_to_int(level: str | int) -> int:
+    if isinstance(level, int):
+        return level
+    lvl = logging.getLevelName(str(level).upper())
+    return lvl if isinstance(lvl, int) else logging.INFO
+
+
+def _ensure_run_id() -> str:
+    run_id = os.environ.get("PLAYLISTARR_RUN_ID")
+    if not run_id:
+        run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        os.environ["PLAYLISTARR_RUN_ID"] = run_id
+    return run_id
+
+
+def _target_paths() -> tuple[str, str | None, Path]:
+    command = os.environ.get("PLAYLISTARR_COMMAND") or "bootstrap"
+    profile = os.environ.get("PLAYLISTARR_PROFILE_NAME") or os.environ.get(
+        "PLAYLISTARR_PROFILE"
+    )
+
+    log_dir = (
+        profile_logs_dir(command, profile) if profile else module_logs_dir(command)
+    )
+    run_id = _ensure_run_id()
+    logfile = log_dir / f"{command}-{run_id}.log"
+    return command, profile, logfile
+
+
+def _squelch_noisy_loggers() -> None:
+    logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
+    logging.getLogger("googleapiclient").setLevel(logging.WARNING)
+    logging.getLogger("google").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
 def init_logging() -> None:
     """
     Initialize logging for the entire process.
 
-    Safe to call multiple times.
+    - Handlers are attached ONLY to the root logger.
+    - Named loggers inherit via propagation.
+    - Safe to call multiple times; file handler is repointed, not stacked.
     """
-    # IMPORTANT: logging must be bootstrappable without API keys / pipeline vars
     env = get_logging_env()
-
-    run_id = resolve_run_id()
-    command = resolve_command()
-    profile = resolve_profile()
-
-    log_dir, logfile = resolve_log_target(command, run_id, profile)
+    _squelch_noisy_loggers()
 
     root = logging.getLogger()
+    command, profile, logfile = _target_paths()
 
-    # -----------------------------------------------------------------
-    # Upgrade / repoint path
-    # -----------------------------------------------------------------
-
-    if state.INITIALIZED:
-        if state.LOG_DIR == log_dir:
-            return
-
-        repoint_file_handler(logfile)
-
-        # Defensive invariant: exactly one FileHandler must exist
-        file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
-        if len(file_handlers) != 1:
-            raise RuntimeError(
-                "Logger invariant violated: expected exactly one FileHandler"
-            )
-
-        state.LOG_DIR = log_dir
-        state.LOG_FILE_PATH = logfile
-        enforce_retention(log_dir, int(env.log_retention))
-        return
-
-    # -----------------------------------------------------------------
-    # First-time initialization
-    # -----------------------------------------------------------------
-
-    state.LOG_DIR = log_dir
-    state.LOG_FILE_PATH = logfile
+    log_dir = logfile.parent
+    log_dir.mkdir(parents=True, exist_ok=True)
     enforce_retention(log_dir, int(env.log_retention))
 
-    handlers: list[logging.Handler] = []
+    root_level = _level_to_int(env.log_level)
 
-    # Silence noisy libraries
-    logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
-    logging.getLogger("googleapiclient").setLevel(logging.WARNING)
-    logging.getLogger("google").setLevel(logging.WARNING)
+    # If already initialized and target is the same, do nothing.
+    if _state.INITIALIZED and _state.LOG_FILE_PATH == logfile:
+        root.setLevel(root_level)
+        return
 
-    # File handler (authoritative)
-    handlers.append(build_file_handler(logfile))
-
-    # Console handler (optional)
-    if not env.quiet and not env.interactive:
-        console_level = logging.getLevelName(env.log_level)
-        if not isinstance(console_level, int):
-            console_level = logging.INFO
-
-        if env.verbose and console_level > logging.INFO:
-            console_level = logging.INFO
-
-        handlers.append(build_console_handler(console_level))
-
-    root.setLevel(env.log_level)
-
+    # Find any existing file handler BEFORE clearing.
+    existing_file: logging.FileHandler | None = None
     for h in list(root.handlers):
-        root.removeHandler(h)
+        if isinstance(h, logging.FileHandler):
+            existing_file = h
+            break
 
-    for h in handlers:
-        root.addHandler(h)
+    # Rebuild root handlers deterministically.
+    root.handlers.clear()
+    root.setLevel(root_level)
 
-    state.INITIALIZED = True
+    if existing_file is not None:
+        repoint_file_handler(existing_file, logfile)
+        root.addHandler(existing_file)
+    else:
+        root.addHandler(build_file_handler(logfile))
+
+    # Console handler (Rich) only when not quiet and not interactive UI mode
+    if not env.quiet and not env.interactive:
+        console_level = root_level
+        if env.verbose and console_level > logging.DEBUG:
+            console_level = logging.DEBUG
+        root.addHandler(build_console_handler(console_level))
+
+    _state.INITIALIZED = True
+    _state.RUN_ID = os.environ.get("PLAYLISTARR_RUN_ID")
+    _state.LOG_DIR = log_dir
+    _state.LOG_FILE_PATH = logfile

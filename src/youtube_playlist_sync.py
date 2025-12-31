@@ -63,6 +63,8 @@ from api_manager import (
     oauth_tripwire,
     mark_oauth_exhausted,
 )
+from env import PROJECT_ROOT
+
 
 # ----------------------------
 # Constants / config
@@ -909,7 +911,10 @@ def main() -> int:
 
     csv_path = Path(env.artists_csv)
     stem = csv_path.stem
-    out_root = Path("../out") / stem
+
+    # Resolve out_root relative to project root so stage execution cwd cannot break it.
+    out_root = (PROJECT_ROOT / "out" / stem).resolve()
+
     cache_path = playlist_cache_path(env.playlist_id)
 
     if not out_root.exists():

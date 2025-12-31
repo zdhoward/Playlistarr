@@ -1,5 +1,6 @@
 def test_logs_dir_default(tmp_path, monkeypatch):
     monkeypatch.setenv("PLAYLISTARR_LOGS_DIR", str(tmp_path / "logs"))
+
     import paths
 
     assert paths.LOGS_DIR.exists()

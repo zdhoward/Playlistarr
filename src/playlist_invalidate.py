@@ -2,7 +2,7 @@
 """
 playlist_invalidate.py
 
-Builds a plan to remove videos from a YouTube playlist that are no longer valid
+Builds a plan to remove videos from a playlist that are no longer valid
 under current discovery + filter rules.
 
 This script:
@@ -10,10 +10,6 @@ This script:
 - DOES NOT talk to YouTube
 - DOES NOT mutate playlists
 - ONLY produces a removal plan
-
-Inputs:
-- artists_csv   (same CSV used for discovery)
-- playlist_id   (used to locate playlist-specific cache + plan)
 
 Source of truth:
 - out/{csv_stem}/{artist}/accepted.json
@@ -23,32 +19,23 @@ Source of truth:
 
 from __future__ import annotations
 
-from env import get_env
-
+import json
+import os
+import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
+import config
 import filters
-import sys
-from api_manager import QuotaExhaustedError
-from utils import canonicalize_artist
-from logger import init_logging, get_logger
-
-# ----------------------------
-# Logging
-# ----------------------------
-init_logging()
-logger = get_logger(__name__)
-
-# ============================================================
-# Helpers
-# ============================================================
+from env import get_env
+from logger import get_logger, init_logging
+from utils import canonicalize_artist, invalidation_plan_path, playlist_cache_path
 
 
-def load_artist_csv(path: str) -> List[str]:
-    """Load artist names from CSV file."""
+def load_artist_csv(path: Path) -> List[str]:
     artists: List[str] = []
-    with open(path, encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8") as f:
         for line in f:
             name = line.strip()
             if name and name.lower() != "artist":
@@ -56,21 +43,16 @@ def load_artist_csv(path: str) -> List[str]:
     return artists
 
 
-def load_json(path: str) -> Any:
-    """Load JSON file, return None if doesn't exist."""
-    if not os.path.exists(path):
+def load_json(path: Path) -> Any:
+    if not path.exists():
         return None
-    with open(path, encoding="utf-8") as f:
+    with path.open("r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def iter_discovery_entries(artist_dir: str) -> Iterable[Dict[str, Any]]:
-    """
-    Yield discovery entries from accepted.json and review.json
-    for a single artist directory.
-    """
+def iter_discovery_entries(artist_dir: Path) -> Iterable[Dict[str, Any]]:
     for fname in ("accepted.json", "review.json"):
-        fpath = os.path.join(artist_dir, fname)
+        fpath = artist_dir / fname
         data = load_json(fpath)
         if not data:
             continue
@@ -81,26 +63,18 @@ def iter_discovery_entries(artist_dir: str) -> Iterable[Dict[str, Any]]:
             yield from data.values()
 
 
-# ============================================================
-# Phase 1 - Build expected video universe
-# ============================================================
-
-
 def build_expected_videos(
     artists: List[str],
-    discovery_root: str,
+    discovery_root: Path,
+    logger,
 ) -> Dict[str, Dict[str, Any]]:
-    """
-    Returns:
-        video_id -> metadata for videos still valid under filters
-    """
     expected: Dict[str, Dict[str, Any]] = {}
 
     for artist in artists:
         artist_key = canonicalize_artist(artist)
-        artist_dir = os.path.join(discovery_root, artist_key)
-        if not os.path.isdir(artist_dir):
-            logger.debug(f"No directory for artist: {artist}")
+        artist_dir = discovery_root / artist_key
+        if not artist_dir.is_dir():
+            logger.debug("[invalidate] No directory for artist: %s", artist)
             continue
 
         for entry in iter_discovery_entries(artist_dir):
@@ -111,23 +85,18 @@ def build_expected_videos(
             title = entry.get("title", "")
             channel = entry.get("channel_title", "")
 
-            # 1. Version / title filtering
             excluded, _ = filters.is_excluded_version(title)
             if excluded:
                 continue
 
-            # 2. Duration filtering
             duration = entry.get("duration")
-            if duration is not None:
-                if not filters.is_valid_duration(duration):
-                    continue
+            if duration is not None and not filters.is_valid_duration(duration):
+                continue
 
-            # 3. Channel hard block
             blocked_keyword = filters.has_blocked_channel_keyword(channel)
             if blocked_keyword:
                 continue
 
-            # 4. Channel trust check
             if not filters.is_trusted_channel(channel, artist):
                 continue
 
@@ -141,17 +110,8 @@ def build_expected_videos(
     return expected
 
 
-# ============================================================
-# Phase 2 - Load playlist cache
-# ============================================================
-
-
 def load_playlist_cache(path: Path) -> Dict[str, Dict[str, Any]]:
-    """
-    Returns:
-        video_id -> playlist cache entry
-    """
-    cache = load_json(str(path))
+    cache = load_json(path)
     if not cache:
         return {}
 
@@ -162,17 +122,11 @@ def load_playlist_cache(path: Path) -> Dict[str, Dict[str, Any]]:
     return items
 
 
-# ============================================================
-# Phase 3 - Build invalidation plan
-# ============================================================
-
-
 def build_invalidation_plan(
     csv_stem: str,
     expected_videos: Dict[str, Dict[str, Any]],
     playlist_videos: Dict[str, Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Build plan to remove videos no longer in expected set."""
     actions: List[Dict[str, Any]] = []
 
     expected_ids = set(expected_videos.keys())
@@ -180,7 +134,6 @@ def build_invalidation_plan(
 
     for video_id in sorted(playlist_ids - expected_ids):
         item = playlist_videos[video_id]
-
         actions.append(
             {
                 "action": "remove",
@@ -199,68 +152,53 @@ def build_invalidation_plan(
     }
 
 
-# ============================================================
-# Entry point
-# ============================================================
+def main() -> int:
+    init_logging()
+    logger = get_logger(__name__)
 
-
-from pathlib import Path
-import json
-import os
-import time
-from utils import playlist_cache_path, invalidation_plan_path
-import config
-
-
-def main() -> None:
     env = get_env()
 
     csv_path = Path(env.artists_csv)
     csv_stem = csv_path.stem
     playlist_id = env.playlist_id
 
-    artists = load_artist_csv(str(csv_path))
-    logger.debug(f"[invalidate] Loaded {len(artists)} artists")
+    artists = load_artist_csv(csv_path)
+    logger.debug("[invalidate] Loaded %d artists", len(artists))
 
-    discovery_root = os.path.join(config.DISCOVERY_ROOT, csv_stem)
-    expected = build_expected_videos(artists, discovery_root)
-    logger.debug(f"[invalidate] Expected valid videos: {len(expected)}")
+    discovery_root = Path(config.DISCOVERY_ROOT) / csv_stem
+    expected = build_expected_videos(artists, discovery_root, logger)
+    logger.debug("[invalidate] Expected valid videos: %d", len(expected))
 
     cache_path = playlist_cache_path(playlist_id)
     playlist_videos = load_playlist_cache(cache_path)
-    logger.debug(f"[invalidate] Playlist videos cached: {len(playlist_videos)}")
+    logger.debug("[invalidate] Playlist videos cached: %d", len(playlist_videos))
+
+    plan_path = invalidation_plan_path(playlist_id)
 
     if not playlist_videos:
         logger.warning(
-            "[invalidate] Playlist cache is empty. "
-            "Run playlist sync first to populate the cache."
+            "[invalidate] Playlist cache is empty. Run youtube_playlist_sync first to populate the cache."
         )
-
-        plan = {
+        empty_plan = {
             "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "actions": [],
         }
-
-        plan_path = invalidation_plan_path(playlist_id)
-        with open(plan_path, "w", encoding="utf-8") as f:
-            json.dump(plan, f, indent=2, ensure_ascii=False)
-
-        logger.debug(f"[invalidate] Created empty plan at {plan_path}")
-        return
+        plan_path.write_text(
+            json.dumps(empty_plan, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        logger.debug("[invalidate] Created empty plan at %s", plan_path)
+        return 0
 
     plan = build_invalidation_plan(csv_stem, expected, playlist_videos)
-    logger.debug(f"[invalidate] Planned removals: {len(plan['actions'])}")
+    logger.debug("[invalidate] Planned removals: %d", len(plan["actions"]))
 
-    plan_path = invalidation_plan_path(playlist_id)
-    with open(plan_path, "w", encoding="utf-8") as f:
-        json.dump(plan, f, indent=2, ensure_ascii=False)
+    plan_path.write_text(
+        json.dumps(plan, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+    logger.debug("[invalidate] Plan written to %s", plan_path)
 
-    logger.debug(f"[invalidate] Plan written to {plan_path}")
+    return 0
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except QuotaExhaustedError:
-        logger.warning("YouTube API quota exhausted - stopping")
-        sys.exit(2)
+    sys.exit(main())

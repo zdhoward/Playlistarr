@@ -1,8 +1,9 @@
+# src/env.py
 from __future__ import annotations
 
-from pathlib import Path
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 
@@ -22,8 +23,10 @@ class ConfigError(RuntimeError):
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PROJECT_ROOT / "config"
 PROFILES_DIR = PROJECT_ROOT / "profiles"
+LOGS_DIR = PROJECT_ROOT / "logs"
 
 ENV_FILE = CONFIG_DIR / ".env"
+
 
 # ============================================================
 # Internal dotenv loader
@@ -33,28 +36,25 @@ ENV_FILE = CONFIG_DIR / ".env"
 def _load_dotenv() -> None:
     """
     Load .env into os.environ without overwriting existing shell variables.
-    This allows run.cmd / docker / CI to override values.
+    CLI / Docker / CI always win.
     """
     if not ENV_FILE.exists():
         return
 
     for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
+        if not line or line.startswith("#") or "=" not in line:
             continue
 
         k, v = line.split("=", 1)
         k = k.strip()
         v = v.strip()
 
-        # Never override shell / CLI values
         if k not in os.environ:
             os.environ[k] = v
 
 
-# Load .env once into process env before anything else
+# Load .env once, immediately
 _load_dotenv()
 
 
@@ -66,32 +66,63 @@ def _require(name: str) -> str:
 
 
 # ============================================================
-# Environment object (frozen per run)
+# Logging-safe environment (bootstrap / CLI / auth)
 # ============================================================
 
 
-class Environment:
+class LoggingEnvironment:
+    """
+    Minimal environment required for logging.
+    MUST NOT require secrets or pipeline-specific variables.
+    """
+
     def __init__(self):
-        # Snapshot raw environment for debugging
         self.raw = dict(os.environ)
 
-        # ------------------------------------------------------------
-        # Logging
-        # ------------------------------------------------------------
-        self.log_level = os.environ.get("LOG_LEVEL", "INFO")
-        self.log_format = os.environ.get("LOG_FORMAT", "text")
+        self.log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
+        self.log_retention = int(os.environ.get("LOG_RETENTION", "10"))
 
-        # Allow per-run override from run.cmd
-        self.log_dir = os.environ.get(
-            "PLAYLISTARR_RUN_LOG_DIR",
-            os.environ.get("LOG_DIR", "../logs"),
+        self.verbose = os.environ.get("PLAYLISTARR_VERBOSE", "0") == "1"
+        self.quiet = os.environ.get("PLAYLISTARR_QUIET", "0") == "1"
+
+        no_ui = os.environ.get("PLAYLISTARR_NO_UI", "0") == "1"
+        self.interactive = (
+            not self.verbose and not self.quiet and not no_ui and sys.stdout.isatty()
         )
 
-        self.log_retention = int(os.environ.get("LOG_RETENTION", "10"))
+
+_LOG_ENV: Optional[LoggingEnvironment] = None
+
+
+def get_logging_env() -> LoggingEnvironment:
+    """
+    Return frozen logging-only environment.
+    Safe in CLI help, auth, and CI contexts.
+    """
+    global _LOG_ENV
+    if _LOG_ENV is None:
+        _LOG_ENV = LoggingEnvironment()
+    return _LOG_ENV
+
+
+# ============================================================
+# Full runtime environment (pipeline)
+# ============================================================
+
+
+class Environment(LoggingEnvironment):
+    """
+    Full runtime environment.
+    Only valid once the pipeline is actually running.
+    """
+
+    def __init__(self):
+        super().__init__()
 
         # ------------------------------------------------------------
         # Core API
         # ------------------------------------------------------------
+
         self.youtube_api_keys = _require("YOUTUBE_API_KEYS").split(",")
         self.country_code = os.environ.get("YOUTUBE_COUNTRY_CODE", "US")
 
@@ -103,8 +134,9 @@ class Environment:
         self.cache_ttl = int(os.environ.get("CACHE_TTL_SECONDS", "21600"))
 
         # ------------------------------------------------------------
-        # Pipeline run context (injected by run.cmd)
+        # Pipeline context (injected by CLI / runner)
         # ------------------------------------------------------------
+
         self.artists_csv = _require("PLAYLISTARR_ARTISTS_CSV")
         self.playlist_id = _require("PLAYLISTARR_PLAYLIST_ID")
 
@@ -115,85 +147,13 @@ class Environment:
         self.max_add = int(os.environ.get("PLAYLISTARR_MAX_ADD", "0"))
         self.progress_every = int(os.environ.get("PLAYLISTARR_PROGRESS_EVERY", "50"))
 
-        self.verbose = os.environ.get("PLAYLISTARR_VERBOSE", "0") == "1"
-        self.quiet = os.environ.get("PLAYLISTARR_QUIET", "0") == "1"
-
-        # Interactive console UI ("normal" mode). Runner-only.
-        self.no_ui = os.environ.get("PLAYLISTARR_NO_UI", "0") == "1"
-        self.interactive = (
-            (not self.verbose)
-            and (not self.quiet)
-            and (not self.no_ui)
-            and sys.stdout.isatty()
-        )
-
-
-# ============================================================
-# Logging-safe environment (no required secrets)
-# ============================================================
-
-
-class LoggingEnvironment:
-    """
-    Minimal env subset for bootstrap logging / CLI help / auth / tests.
-
-    This MUST NOT require API keys or pipeline vars.
-    """
-
-    def __init__(self):
-        self.raw = dict(os.environ)
-
-        self.log_level = os.environ.get("LOG_LEVEL", "INFO")
-        self.log_format = os.environ.get("LOG_FORMAT", "text")
-
-        # Keep compatible with existing env conventions.
-        # logger/log_paths may also look at PLAYLISTARR_LOGS_DIR directly.
-        self.log_dir = os.environ.get(
-            "PLAYLISTARR_RUN_LOG_DIR",
-            os.environ.get("LOG_DIR", "../logs"),
-        )
-
-        self.log_retention = int(os.environ.get("LOG_RETENTION", "10"))
-
-        self.verbose = os.environ.get("PLAYLISTARR_VERBOSE", "0") == "1"
-        self.quiet = os.environ.get("PLAYLISTARR_QUIET", "0") == "1"
-
-        # Logger console behavior: treat "interactive" as "suppress console logging"
-        # if explicitly disabled or not a TTY.
-        no_ui = os.environ.get("PLAYLISTARR_NO_UI", "0") == "1"
-        self.interactive = (
-            (not self.verbose)
-            and (not self.quiet)
-            and (not no_ui)
-            and sys.stdout.isatty()
-        )
-
-
-_LOG_ENV: Optional[LoggingEnvironment] = None
-
-
-def get_logging_env() -> LoggingEnvironment:
-    """
-    Return the frozen LoggingEnvironment for this process.
-    Safe in CI and unit tests without any credentials.
-    """
-    global _LOG_ENV
-    if _LOG_ENV is None:
-        _LOG_ENV = LoggingEnvironment()
-    return _LOG_ENV
-
-
-# ============================================================
-# Frozen singleton
-# ============================================================
 
 _ENV: Optional[Environment] = None
 
 
 def get_env() -> Environment:
     """
-    Return the frozen Environment for this run.
-    .env is loaded only once and never re-read.
+    Return frozen runtime environment.
     """
     global _ENV
     if _ENV is None:
@@ -206,7 +166,7 @@ def get_env() -> Environment:
 # ============================================================
 
 
-def export_cmd():
+def export_cmd() -> None:
     """
     Used by run.cmd to import .env into Windows shell.
     """
