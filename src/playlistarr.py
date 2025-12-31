@@ -4,42 +4,17 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
+from cli.cli_env import build_env_parser
 
-from env import PROJECT_ROOT
+from bootstrap import bootstrap_base_env, bootstrap_run_context
 
+bootstrap_base_env()
+
+# Avoid importing env.py at module import time for path resolution.
+# Compute project root locally, then bootstrap will load .env and reset caches.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 os.chdir(PROJECT_ROOT)
-
-
-# ------------------------------------------------------------
-# Minimal dotenv loader (silent, production-safe)
-# ------------------------------------------------------------
-
-
-def _load_dotenv(path: Path) -> None:
-    if not path.exists():
-        return
-
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-
-        k, v = line.split("=", 1)
-        k = k.strip()
-        v = v.strip()
-
-        if " #" in v:
-            v = v.split(" #", 1)[0].rstrip()
-        elif "\t#" in v:
-            v = v.split("\t#", 1)[0].rstrip()
-
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
-            v = v[1:-1]
-
-        if k and k not in os.environ:
-            os.environ[k] = v
 
 
 # ------------------------------------------------------------
@@ -86,6 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     from cli.cli_logs import build_logs_parser
     from cli.cli_auth import build_auth_parser
 
+    build_env_parser(sub)
     build_sync_parser(sub)
     build_profiles_parser(sub)
     build_runs_parser(sub)
@@ -110,14 +86,27 @@ def main() -> int:
     if args.command in ("sync", "run") and getattr(args, "profile", None) == "help":
         return _dispatch_help(parser, sys.argv[1:])
 
-    # Fix run-id ONCE
-    if "PLAYLISTARR_RUN_ID" not in os.environ:
-        os.environ["PLAYLISTARR_RUN_ID"] = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # --------------------------------------------------------
+    # Establish run context BEFORE logging / pipeline execution
+    # --------------------------------------------------------
 
-    # 🔑 THIS WAS MISSING - EXPORT COMMAND FOR LOGGER
-    os.environ.setdefault("PLAYLISTARR_COMMAND", args.command)
+    # Best-effort profile name discovery for log routing.
+    profile_name = getattr(args, "profile", None)
+    bootstrap_run_context(
+        command=args.command,
+        profile_name=profile_name if isinstance(profile_name, str) else None,
+        verbose=bool(getattr(args, "verbose", False)),
+        quiet=bool(getattr(args, "quiet", False)),
+        interactive=bool(
+            getattr(args, "ui", False) or getattr(args, "interactive", False)
+        ),
+    )
 
-    _load_dotenv(PROJECT_ROOT / ".env")
+    # Dispatch
+    if args.command == "env":
+        from cli.cli_env import handle_env
+
+        return handle_env(args)
 
     if args.command in ("sync", "run"):
         from cli.cli_sync import handle_sync

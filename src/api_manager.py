@@ -20,18 +20,10 @@ import requests
 from googleapiclient.errors import HttpError
 
 import config
-from logger import init_logging, get_logger
+from logger import get_logger
 
-from env import get_env
 
-env = get_env()
-
-# ----------------------------
-# Logging
-# ----------------------------
-init_logging()
 logger = get_logger(__name__)
-
 T = TypeVar("T")
 
 # ============================================================
@@ -274,7 +266,11 @@ def http_get_json(
 
         response.raise_for_status()
 
-        time.sleep(env.SLEEP_BETWEEN_CALLS_SEC)
+        # Keep the per-request sleep configurable at runtime.
+        # Import lazily to avoid env construction / side-effects at import time.
+        from env import get_env
+
+        time.sleep(get_env().sleep_sec)
         return response.json()
 
     return execute_with_retry(make_request, "http_get_json")

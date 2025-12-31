@@ -1,4 +1,3 @@
-# src/logger/__init__.py
 from __future__ import annotations
 
 import logging
@@ -15,7 +14,6 @@ from . import state as _state
 
 
 def get_logger(name: str) -> logging.Logger:
-    # No handlers, no levels, no propagation changes here.
     return logging.getLogger(name)
 
 
@@ -67,27 +65,25 @@ def init_logging() -> None:
     _squelch_noisy_loggers()
 
     root = logging.getLogger()
-    command, profile, logfile = _target_paths()
+    _, _, logfile = _target_paths()
 
     log_dir = logfile.parent
     log_dir.mkdir(parents=True, exist_ok=True)
     enforce_retention(log_dir, int(env.log_retention))
 
-    root_level = _level_to_int(env.log_level)
+    # Base level from env, but verbose forces DEBUG everywhere.
+    root_level = logging.DEBUG if env.verbose else _level_to_int(env.log_level)
 
-    # If already initialized and target is the same, do nothing.
     if _state.INITIALIZED and _state.LOG_FILE_PATH == logfile:
         root.setLevel(root_level)
         return
 
-    # Find any existing file handler BEFORE clearing.
     existing_file: logging.FileHandler | None = None
     for h in list(root.handlers):
         if isinstance(h, logging.FileHandler):
             existing_file = h
             break
 
-    # Rebuild root handlers deterministically.
     root.handlers.clear()
     root.setLevel(root_level)
 
@@ -99,9 +95,7 @@ def init_logging() -> None:
 
     # Console handler (Rich) only when not quiet and not interactive UI mode
     if not env.quiet and not env.interactive:
-        console_level = root_level
-        if env.verbose and console_level > logging.DEBUG:
-            console_level = logging.DEBUG
+        console_level = logging.DEBUG if env.verbose else root_level
         root.addHandler(build_console_handler(console_level))
 
     _state.INITIALIZED = True

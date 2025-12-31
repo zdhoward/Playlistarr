@@ -6,6 +6,8 @@ import sys
 from rich.console import Console
 from rich.logging import RichHandler
 
+import os
+
 from env import get_logging_env
 
 UI_CONSOLE = Console(
@@ -20,7 +22,7 @@ class ConsoleGateFilter(logging.Filter):
         env = get_logging_env()
 
         # Only suppress console logging if quiet mode is explicitly requested
-        if env.quiet:
+        if os.environ.get("PLAYLISTARR_UI") == "1":
             return False
 
         return True

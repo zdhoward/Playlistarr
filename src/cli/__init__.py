@@ -18,4 +18,5 @@ __all__ = [
     "cli_runs",
     "cli_logs",
     "cli_auth",
+    "cli_env",
 ]

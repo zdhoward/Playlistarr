@@ -8,6 +8,7 @@ from logger import init_logging, get_logger
 from paths import CACHE_DIR
 from rich.console import Console
 from rich.text import Text
+from env import reset_env_caches
 
 
 # ------------------------------------------------------------
@@ -73,6 +74,9 @@ def _is_verbose() -> bool:
 def handle_auth(args: argparse.Namespace) -> int:
     _set_output_env(args)
     _seed_minimal_required_env()
+
+    # We mutate os.environ in this command; invalidate cached env views.
+    reset_env_caches()
 
     # Ensure auth is global
     os.environ.pop("PLAYLISTARR_PROFILE", None)

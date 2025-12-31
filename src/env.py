@@ -1,48 +1,34 @@
-# src/env.py
 from __future__ import annotations
 
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-
-# ============================================================
-# Errors
-# ============================================================
-
-
-class ConfigError(RuntimeError):
-    pass
-
-
-# ============================================================
+# ------------------------------------------------------------
 # Paths
-# ============================================================
+# ------------------------------------------------------------
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_DIR = PROJECT_ROOT / "config"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROFILES_DIR = PROJECT_ROOT / "profiles"
-LOGS_DIR = PROJECT_ROOT / "logs"
 
-ENV_FILE = CONFIG_DIR / ".env"
-
-
-# ============================================================
-# Internal dotenv loader
-# ============================================================
+# ------------------------------------------------------------
+# Minimal dotenv loader (read-only helper, bootstrap owns usage)
+# ------------------------------------------------------------
 
 
-def _load_dotenv() -> None:
+def _load_dotenv(path: Path) -> None:
     """
-    Load .env into os.environ without overwriting existing shell variables.
-    CLI / Docker / CI always win.
+    Minimal dotenv loader.
+    - Silent
+    - Never overrides existing os.environ
     """
-    if not ENV_FILE.exists():
+    if not path.exists():
         return
 
-    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
 
@@ -50,12 +36,37 @@ def _load_dotenv() -> None:
         k = k.strip()
         v = v.strip()
 
-        if k not in os.environ:
+        # strip inline comments
+        if " #" in v:
+            v = v.split(" #", 1)[0].rstrip()
+        elif "\t#" in v:
+            v = v.split("\t#", 1)[0].rstrip()
+
+        # strip quotes
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+            v = v[1:-1]
+
+        if k and k not in os.environ:
             os.environ[k] = v
 
 
-# Load .env once, immediately
-_load_dotenv()
+# ------------------------------------------------------------
+# Logs path (logger depends on this)
+# ------------------------------------------------------------
+
+LOGS_DIR = (
+    Path(os.environ.get("PLAYLISTARR_LOGS_DIR", PROJECT_ROOT / "logs"))
+    .expanduser()
+    .resolve()
+)
+
+# ------------------------------------------------------------
+# Errors / helpers
+# ------------------------------------------------------------
+
+
+class ConfigError(RuntimeError):
+    pass
 
 
 def _require(name: str) -> str:
@@ -65,109 +76,161 @@ def _require(name: str) -> str:
     return v
 
 
-# ============================================================
-# Logging-safe environment (bootstrap / CLI / auth)
-# ============================================================
+def _as_bool(v: str) -> bool:
+    return v.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _as_int(v: str, default: int) -> int:
+    try:
+        return int(v)
+    except Exception:
+        return default
+
+
+def _as_float(v: str, default: float) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
+# ------------------------------------------------------------
+# Logging environment (SAFE ANYWHERE)
+# ------------------------------------------------------------
+
+
+@dataclass(frozen=True)
 class LoggingEnvironment:
-    """
-    Minimal environment required for logging.
-    MUST NOT require secrets or pipeline-specific variables.
-    """
-
-    def __init__(self):
-        self.raw = dict(os.environ)
-
-        self.log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
-        self.log_retention = int(os.environ.get("LOG_RETENTION", "10"))
-
-        self.verbose = os.environ.get("PLAYLISTARR_VERBOSE", "0") == "1"
-        self.quiet = os.environ.get("PLAYLISTARR_QUIET", "0") == "1"
-
-        no_ui = os.environ.get("PLAYLISTARR_NO_UI", "0") == "1"
-        self.interactive = (
-            not self.verbose and not self.quiet and not no_ui and sys.stdout.isatty()
-        )
-
-
-_LOG_ENV: Optional[LoggingEnvironment] = None
+    log_level: str
+    log_retention: int
+    verbose: bool
+    quiet: bool
+    interactive: bool
 
 
 def get_logging_env() -> LoggingEnvironment:
-    """
-    Return frozen logging-only environment.
-    Safe in CLI help, auth, and CI contexts.
-    """
-    global _LOG_ENV
-    if _LOG_ENV is None:
-        _LOG_ENV = LoggingEnvironment()
-    return _LOG_ENV
+    log_level = os.environ.get("LOG_LEVEL", "INFO")
+    log_retention = _as_int(os.environ.get("LOG_RETENTION", "30"), 30)
+
+    verbose = _as_bool(os.environ.get("PLAYLISTARR_VERBOSE", "0"))
+    quiet = _as_bool(os.environ.get("PLAYLISTARR_QUIET", "0"))
+
+    no_ui = _as_bool(os.environ.get("PLAYLISTARR_NO_UI", "0"))
+    ui_requested = _as_bool(os.environ.get("PLAYLISTARR_UI", "0"))
+
+    interactive = ui_requested and not quiet and not no_ui and sys.stdout.isatty()
+
+    return LoggingEnvironment(
+        log_level=log_level,
+        log_retention=log_retention,
+        verbose=verbose,
+        quiet=quiet,
+        interactive=interactive,
+    )
 
 
-# ============================================================
-# Full runtime environment (pipeline)
-# ============================================================
+# ------------------------------------------------------------
+# Full runtime environment (PIPELINE ONLY)
+# ------------------------------------------------------------
 
 
-class Environment(LoggingEnvironment):
-    """
-    Full runtime environment.
-    Only valid once the pipeline is actually running.
-    """
-
+class Environment:
     def __init__(self):
-        super().__init__()
+        # Logging snapshot (immutable)
+        self._logging = get_logging_env()
 
-        # ------------------------------------------------------------
-        # Core API
-        # ------------------------------------------------------------
+        # ---- REQUIRED API ----
+        self.youtube_api_keys = [
+            k.strip() for k in _require("YOUTUBE_API_KEYS").split(",") if k.strip()
+        ]
 
-        self.youtube_api_keys = _require("YOUTUBE_API_KEYS").split(",")
         self.country_code = os.environ.get("YOUTUBE_COUNTRY_CODE", "US")
 
-        self.sleep_sec = float(os.environ.get("YT_SLEEP_SEC", "0.2"))
-        self.request_timeout = int(os.environ.get("YT_REQUEST_TIMEOUT", "30"))
-        self.max_retries = int(os.environ.get("YT_MAX_RETRIES", "3"))
-        self.backoff_base = float(os.environ.get("YT_BACKOFF_BASE_SEC", "1.0"))
+        self.sleep_sec = _as_float(os.environ.get("YT_SLEEP_SEC", "0.2"), 0.2)
+        self.request_timeout = _as_int(os.environ.get("YT_REQUEST_TIMEOUT", "30"), 30)
+        self.max_retries = _as_int(os.environ.get("YT_MAX_RETRIES", "5"), 5)
 
-        self.cache_ttl = int(os.environ.get("CACHE_TTL_SECONDS", "21600"))
+        # ---- PIPELINE CONTEXT ----
+        self.command = os.environ.get("PLAYLISTARR_COMMAND", "bootstrap")
+        self.profile_name = os.environ.get(
+            "PLAYLISTARR_PROFILE_NAME"
+        ) or os.environ.get("PLAYLISTARR_PROFILE")
+        self.profile_path = os.environ.get("PLAYLISTARR_PROFILE_PATH", "")
+        self.artists_csv = os.environ.get("PLAYLISTARR_ARTISTS_CSV", "")
+        self.playlist_id = os.environ.get("PLAYLISTARR_PLAYLIST_ID", "")
 
-        # ------------------------------------------------------------
-        # Pipeline context (injected by CLI / runner)
-        # ------------------------------------------------------------
+        self.max_add = _as_int(os.environ.get("PLAYLISTARR_MAX_ADD", "0"), 0)
+        self.progress_every = _as_int(
+            os.environ.get("PLAYLISTARR_PROGRESS_EVERY", "50"), 50
+        )
 
-        self.artists_csv = _require("PLAYLISTARR_ARTISTS_CSV")
-        self.playlist_id = _require("PLAYLISTARR_PLAYLIST_ID")
+        # ---- PIPELINE FLAGS ----
+        self.force_update = _as_bool(os.environ.get("PLAYLISTARR_FORCE_UPDATE", "0"))
+        self.dry_run = _as_bool(os.environ.get("PLAYLISTARR_DRY_RUN", "0"))
+        self.no_filter = _as_bool(os.environ.get("PLAYLISTARR_NO_FILTER", "0"))
 
-        self.force_update = os.environ.get("PLAYLISTARR_FORCE_UPDATE", "0") == "1"
-        self.no_filter = os.environ.get("PLAYLISTARR_NO_FILTER", "0") == "1"
-        self.dry_run = os.environ.get("PLAYLISTARR_DRY_RUN", "0") == "1"
+    def as_dict(self) -> dict:
+        return {
+            "Logging": {
+                "log_level": self.log_level,
+                "log_retention": self.log_retention,
+                "verbose": self.verbose,
+                "quiet": self.quiet,
+                "interactive": self.interactive,
+            },
+            "Pipeline": {
+                "command": self.command,
+                "profile_name": self.profile_name,
+                "profile_path": self.profile_path,
+                "artists_csv": self.artists_csv,
+                "playlist_id": self.playlist_id,
+            },
+            "Behavior": {
+                "dry_run": self.dry_run,
+                "force_update": self.force_update,
+                "no_filter": self.no_filter,
+                "max_add": self.max_add,
+                "progress_every": self.progress_every,
+            },
+            "API": {
+                "youtube_api_keys": f"{len(self.youtube_api_keys)} keys loaded",
+                "country_code": self.country_code,
+            },
+        }
 
-        self.max_add = int(os.environ.get("PLAYLISTARR_MAX_ADD", "0"))
-        self.progress_every = int(os.environ.get("PLAYLISTARR_PROGRESS_EVERY", "50"))
+    # ---- logging passthrough ----
+    @property
+    def log_level(self) -> str:
+        return self._logging.log_level
+
+    @property
+    def log_retention(self) -> int:
+        return self._logging.log_retention
+
+    @property
+    def verbose(self) -> bool:
+        return self._logging.verbose
+
+    @property
+    def quiet(self) -> bool:
+        return self._logging.quiet
+
+    @property
+    def interactive(self) -> bool:
+        return self._logging.interactive
 
 
 _ENV: Optional[Environment] = None
 
 
+def reset_env_caches() -> None:
+    """Invalidate cached views of environment variables."""
+    global _ENV
+    _ENV = None
+
+
 def get_env() -> Environment:
-    """
-    Return frozen runtime environment.
-    """
     global _ENV
     if _ENV is None:
         _ENV = Environment()
     return _ENV
-
-
-# ============================================================
-# Export to cmd.exe
-# ============================================================
-
-
-def export_cmd() -> None:
-    """
-    Used by run.cmd to import .env into Windows shell.
-    """
-    _load_dotenv()
