@@ -28,6 +28,8 @@ def clean_env_and_modules(monkeypatch):
         monkeypatch.delenv(k, raising=False)
 
     # Minimal required env
+    monkeypatch.setenv("YOUTUBE_API_KEYS", "test-key")
+    monkeypatch.setenv("PLAYLISTARR_COMMAND", "test")
     monkeypatch.setenv("PLAYLISTARR_ARTISTS_CSV", "dummy.csv")
     monkeypatch.setenv("PLAYLISTARR_PLAYLIST_ID", "DUMMY_PLAYLIST")
 
